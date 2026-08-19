@@ -125,9 +125,9 @@ static NSString *MI_findDatabase(void) {
 
     for (NSString *root in searchRoots) {
         if (![fm fileExistsAtPath:root]) continue;
-        NSDirectoryEnumerator *enum = [fm enumeratorAtPath:root];
+        NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:root];
         NSString *rel;
-        while ((rel = [enum nextObject])) {
+        while ((rel = [dirEnum nextObject])) {
             if (![rel hasSuffix:@".db"]) continue;
             NSString *full = [root stringByAppendingPathComponent:rel];
             [allDBs addObject:full];
@@ -140,9 +140,9 @@ static NSString *MI_findDatabase(void) {
     MI_log(@"DB search: %d AppGroups found", (int)groups.count);
     for (NSString *g in groups) {
         NSString *gp = [sharedBase stringByAppendingPathComponent:g];
-        NSDirectoryEnumerator *enum = [fm enumeratorAtPath:gp];
+        NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:gp];
         NSString *rel;
-        while ((rel = [enum nextObject])) {
+        while ((rel = [dirEnum nextObject])) {
             if (![rel hasSuffix:@".db"]) continue;
             [allDBs addObject:[gp stringByAppendingPathComponent:rel]];
         }
