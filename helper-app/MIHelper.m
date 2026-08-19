@@ -49,7 +49,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *copyButton;
-@property (nonatomic, copy) NSString *latestResult;
+@property (nonatomic, copy) NSString *resultText;
 @end
 
 @implementation MIHelperVC
@@ -58,7 +58,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     self.title = @"MI Helper v1.2";
-    self.latestResult = @"";
+    self.resultText = @"";
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -180,8 +180,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *tag = note.userInfo[@"tag"] ?: @"result";
                 NSString *text = note.userInfo[@"text"] ?: @"(empty)";
-                self.latestResult = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
-                self.resultsView.text = self.latestResult;
+                self.resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
+                self.resultsView.text = self.resultText;
                 [self.resultsView scrollRangeToVisible:NSMakeRange(0, 0)];
             });
         }];
@@ -269,8 +269,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 }
 
 - (void)copyTapped {
-    if (self.latestResult.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
-    [UIPasteboard generalPasteboard].string = self.latestResult;
+    if (self.resultText.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
+    [UIPasteboard generalPasteboard].string = self.resultText;
     [self flash:@"\u2705 Copied to clipboard" red:NO];
 }
 
