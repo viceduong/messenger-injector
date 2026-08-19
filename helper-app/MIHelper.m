@@ -17,6 +17,7 @@
 #import <UIKit/UIKit.h>
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wcocoa-api-design"
 
 @interface NSDistributedNotificationCenter : NSObject
 + (instancetype)defaultCenter;
