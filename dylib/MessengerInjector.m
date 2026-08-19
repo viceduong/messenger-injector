@@ -46,6 +46,7 @@
 static NSString *const kNotifySend       = @"com.messenger.injector.send";
 static NSString *const kNotifyDump       = @"com.messenger.injector.dump";
 static NSString *const kNotifyReady      = @"com.messenger.injector.ready";
+static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 static NSString *const kNotifyFindDB     = @"com.messenger.injector.findDB";
 static NSString *const kNotifyDumpSchema = @"com.messenger.injector.dumpSchema";
 static NSString *const kNotifyDumpSample = @"com.messenger.injector.dumpSample";
@@ -494,14 +495,45 @@ static void MI_hDump(void) {
         MI_dumpViewFile(r);
     });
 }
+static void MI_postResult(NSString *tag, NSString *text) {
+    MI_log(@"%@: %@", tag, text);
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyResult
+                      object:nil
+                    userInfo:@{@"tag": tag, @"text": text.length > 5000 ? [text substringToIndex:5000] : text}
+            deliverImmediately:YES];
+}
+
 static void MI_hFindDB(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ MI_findDatabase(); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *path = MI_findDatabase();
+        if (path) {
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+            unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+            MI_postResult(@"findDB", [NSString stringWithFormat:@"DB: %@\nSize: %.1f MB", path, sz / 1048576.0]);
+        } else {
+            MI_postResult(@"findDB", @"No lightspeed-*.db found in any search path.");
+        }
+    });
 }
 static void MI_hSchema(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ MI_dumpSchema(MI_findDatabase()); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *dbPath = MI_findDatabase();
+        MI_dumpSchema(dbPath);
+        NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_schema.txt"];
+        NSString *content = [NSString stringWithContentsOfFile:out encoding:NSUTF8StringEncoding error:nil];
+        MI_postResult(@"schema", content.length > 0 ? content : @"Schema file empty or missing.");
+    });
 }
 static void MI_hSample(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ MI_dumpSample(MI_findDatabase()); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *dbPath = MI_findDatabase();
+        MI_dumpSample(dbPath);
+        NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_sample.txt"];
+        NSString *content = [NSString stringWithContentsOfFile:out encoding:NSUTF8StringEncoding error:nil];
+        MI_postResult(@"sample", content.length > 0 ? content : @"Sample file empty or missing.");
+    });
 }
 
 // ============================================================
