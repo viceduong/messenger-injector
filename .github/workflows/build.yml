@@ -65,6 +65,7 @@ jobs:
             -ObjC \
             -fobjc-arc \
             -O2 \
+            -Wno-cocoa-api-design \
             -o helper-app/MIHelper \
             helper-app/MIHelper.m
 
