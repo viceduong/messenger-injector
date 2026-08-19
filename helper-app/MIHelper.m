@@ -84,8 +84,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 
     // --- Send Message ---
     UILabel *sendSec = [self sec:@"Send Message (UI Automation)"];
-    self.threadField = [self makeField:@"Thread ID (user_id or group fbId)" UIKeyboardTypeNumberPad];
-    self.messageField = [self makeField:@"Message to send" UIKeyboardTypeDefault];
+    self.threadField = [self makeField:@"Thread ID (user_id or group fbId)" UIKeyboardType:UIKeyboardTypeNumberPad];
+    self.messageField = [self makeField:@"Message to send" UIKeyboardType:UIKeyboardTypeDefault];
 
     UIView *groupRow = [[UIView alloc] init];
     groupRow.translatesAutoresizingMaskIntoConstraints = NO;
@@ -150,11 +150,11 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
         [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
         [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentView.topAnchor constant:10],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentView.bottomAnchor constant:-10],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentView.leadingAnchor constant:16],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentView.trailingAnchor constant:-16],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor constant:-32],
+        [stack.topAnchor constraintEqualToAnchor:scroll.topAnchor constant:10],
+        [stack.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor constant:-10],
+        [stack.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor constant:16],
+        [stack.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor constant:-16],
+        [stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-32],
     ]];
 
     // Listen for dylib ready
