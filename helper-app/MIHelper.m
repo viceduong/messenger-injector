@@ -16,6 +16,19 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+// NSDistributedNotificationCenter is not exposed in the iOS SDK umbrella header.
+@interface NSDistributedNotificationCenter : NSObject
++ (instancetype)defaultCenter;
+- (void)addObserverForName:(NSNotificationName)aName
+                    object:(id)object
+                     queue:(NSOperationQueue *)queue
+                usingBlock:(void (^)(NSNotification *note))block;
+- (void)postNotificationName:(NSNotificationName)aName
+                      object:(id)object
+                    userInfo:(NSDictionary <NSObject *, NSObject *> * _Nullable)userInfo
+        deliverImmediately:(BOOL)deliverImmediately;
+@end
+
 static NSString *const kNotifySend  = @"com.messenger.injector.send";
 static NSString *const kNotifyDump  = @"com.messenger.injector.dump";
 static NSString *const kNotifyReady = @"com.messenger.injector.ready";
