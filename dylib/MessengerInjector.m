@@ -22,9 +22,12 @@
  */
 
 #import <Foundation/Foundation.h>
+#import <Foundation/NSDistributedNotificationCenter.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 // ============================================================
 // Notification names & keys
@@ -244,7 +247,7 @@ static void MI_dumpToTempFile(UIView *root) {
         [[NSMutableData data] writeToFile:path atomically:YES];
     }
 
-    NSFileHandle *fh = [NSFileHandle fileForWritingAtPath:path];
+    NSFileHandle *fh = [[NSFileManager defaultManager] fileHandleForWritingAtPath:path];
     if (!fh) {
         MI_log(@"DUMP: Cannot open temp file at %@", path);
         return;
