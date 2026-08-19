@@ -51,7 +51,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 @property (nonatomic, strong) UISwitch *groupSwitch;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
-@property (nonatomic, strong) UIButton *copyBtn;
+@property (nonatomic, strong) UIButton *btnCopy;
 @end
 
 @implementation MIHelperVC
@@ -129,7 +129,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     self.resultsView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.resultsView.heightAnchor constraintEqualToConstant:200].active = YES;
 
-    self.copyBtn = [self makeBtn:@"Copy Results" bg:[UIColor systemGreenColor] act:@selector(copyTapped) h:36];
+    self.btnCopy = [self makeBtn:@"Copy Results" bg:[UIColor systemGreenColor] act:@selector(copyTapped) h:36];
 
     [stack addArrangedSubview:title];
     [stack addArrangedSubview:self.statusLabel];
@@ -145,7 +145,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     [stack addArrangedSubview:dumpViewBtn];
     [stack addArrangedSubview:resSec];
     [stack addArrangedSubview:self.resultsView];
-    [stack addArrangedSubview:self.copyBtn];
+    [stack addArrangedSubview:self.btnCopy];
 
     [scroll addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
