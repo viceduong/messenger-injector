@@ -48,7 +48,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *copyButton;
-@property (nonatomic, copy) NSString *lastResult;
+@property (nonatomic, copy) NSString *latestResult;
 @end
 
 @implementation MIHelperVC
@@ -57,7 +57,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     self.title = @"MI Helper v1.2";
-    self.lastResult = @"";
+    self.latestResult = @"";
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -179,9 +179,9 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *tag = note.userInfo[@"tag"] ?: @"result";
                 NSString *text = note.userInfo[@"text"] ?: @"(empty)";
-                self.lastResult = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
-                self.resultsView.text = self.lastResult;
-                self.resultsView.scrollRangeToVisible:NSMakeRange(0, 0);
+                self.latestResult = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
+                self.resultsView.text = self.latestResult;
+                [self.resultsView scrollRangeToVisible:NSMakeRange(0, 0)];
             });
         }];
 }
@@ -268,8 +268,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 }
 
 - (void)copyTapped {
-    if (self.lastResult.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
-    [UIPasteboard generalPasteboard].string = self.lastResult;
+    if (self.latestResult.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
+    [UIPasteboard generalPasteboard].string = self.latestResult;
     [self flash:@"\u2705 Copied to clipboard" red:NO];
 }
 
