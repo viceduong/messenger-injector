@@ -260,7 +260,7 @@ static void MI_dumpToTempFile(UIView *root) {
         [[NSMutableData data] writeToFile:path atomically:YES];
     }
 
-    NSFileHandle *fh = [[NSFileManager defaultManager] fileHandleForWritingAtPath:path];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
     if (!fh) {
         MI_log(@"DUMP: Cannot open temp file at %@", path);
         return;
