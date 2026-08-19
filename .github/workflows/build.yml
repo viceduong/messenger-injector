@@ -35,6 +35,7 @@ jobs:
             -miphoneos-version-min=15.0 \
             -framework Foundation \
             -framework UIKit \
+            -lsqlite3 \
             -ObjC \
             -fobjc-arc \
             -O2 \

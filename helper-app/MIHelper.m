@@ -1,22 +1,23 @@
 /**
- * MIHelper — Trigger app for MessengerInjector
+ * MIHelper v1.1 — Trigger app for MessengerInjector
  *
- * Minimal iOS app that posts NSDistributedNotifications to trigger
- * the MessengerInjector dylib inside Facebook Messenger.
+ * Posts NSDistributedNotifications to trigger the dylib inside Messenger.
+ * v1.1 adds: FindDB, Dump Schema, Dump Sample buttons.
  *
  * Build:
  *   xcrun clang -arch arm64 \
  *     -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
  *     -miphoneos-version-min=15.0 \
  *     -framework Foundation -framework UIKit \
- *     -ObjC -fobjc-arc \
+ *     -ObjC -fobjc-arc -O2 \
  *     -o MIHelper MIHelper.m
  */
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// NSDistributedNotificationCenter is not exposed in the iOS SDK umbrella header.
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 @interface NSDistributedNotificationCenter : NSObject
 + (instancetype)defaultCenter;
 - (void)addObserverForName:(NSNotificationName)aName
@@ -29,12 +30,15 @@
         deliverImmediately:(BOOL)deliverImmediately;
 @end
 
-static NSString *const kNotifySend  = @"com.messenger.injector.send";
-static NSString *const kNotifyDump  = @"com.messenger.injector.dump";
-static NSString *const kNotifyReady = @"com.messenger.injector.ready";
+static NSString *const kNotifySend       = @"com.messenger.injector.send";
+static NSString *const kNotifyDump       = @"com.messenger.injector.dump";
+static NSString *const kNotifyReady      = @"com.messenger.injector.ready";
+static NSString *const kNotifyFindDB     = @"com.messenger.injector.findDB";
+static NSString *const kNotifyDumpSchema = @"com.messenger.injector.dumpSchema";
+static NSString *const kNotifyDumpSample = @"com.messenger.injector.dumpSample";
 
 // ============================================================
-// Main view controller
+// View controller
 // ============================================================
 @interface MIHelperVC : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *threadField;
@@ -42,7 +46,10 @@ static NSString *const kNotifyReady = @"com.messenger.injector.ready";
 @property (nonatomic, strong) UISwitch *groupSwitch;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *sendButton;
-@property (nonatomic, strong) UIButton *dumpButton;
+@property (nonatomic, strong) UIButton *dumpViewButton;
+@property (nonatomic, strong) UIButton *findDBButton;
+@property (nonatomic, strong) UIButton *dumpSchemaButton;
+@property (nonatomic, strong) UIButton *dumpSampleButton;
 @end
 
 @implementation MIHelperVC
@@ -50,46 +57,42 @@ static NSString *const kNotifyReady = @"com.messenger.injector.ready";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-    self.title = @"MI Helper";
-    self.navigationItem.title = @"MI Helper";
+    self.title = @"MI Helper v1.1";
 
     UILabel *title = [[UILabel alloc] init];
     title.text = @"Messenger Injector";
-    title.font = [UIFont systemFontOfSize:28 weight:UIFontWeightBold];
+    title.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
     title.textAlignment = NSTextAlignmentCenter;
     title.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // Thread ID field
+    // --- Section: Send Message (v1.0) ---
+    UILabel *sendSection = [self sectionLabel:@"Send Message (UI Automation)"];
+
     self.threadField = [[UITextField alloc] init];
     self.threadField.placeholder = @"Thread ID (user_id or group fbId)";
     self.threadField.borderStyle = UITextBorderStyleRoundedRect;
-    self.threadField.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+    self.threadField.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
     self.threadField.keyboardType = UIKeyboardTypeNumberPad;
     self.threadField.autocorrectionType = UITextAutocorrectionTypeNo;
     self.threadField.delegate = self;
     self.threadField.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // Message field
     self.messageField = [[UITextField alloc] init];
     self.messageField.placeholder = @"Message to send";
     self.messageField.borderStyle = UITextBorderStyleRoundedRect;
-    self.messageField.font = [UIFont systemFontOfSize:16];
+    self.messageField.font = [UIFont systemFontOfSize:15];
     self.messageField.delegate = self;
     self.messageField.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // Group switch
     UIView *groupRow = [[UIView alloc] init];
     groupRow.translatesAutoresizingMaskIntoConstraints = NO;
-
     UILabel *groupLabel = [[UILabel alloc] init];
     groupLabel.text = @"Group chat";
-    groupLabel.font = [UIFont systemFontOfSize:15];
+    groupLabel.font = [UIFont systemFontOfSize:14];
     groupLabel.translatesAutoresizingMaskIntoConstraints = NO;
-
     self.groupSwitch = [[UISwitch alloc] init];
     self.groupSwitch.translatesAutoresizingMaskIntoConstraints = NO;
     [self.groupSwitch addTarget:self action:@selector(groupToggled:) forControlEvents:UIControlEventValueChanged];
-
     [groupRow addSubview:groupLabel];
     [groupRow addSubview:self.groupSwitch];
     [NSLayoutConstraint activateConstraints:@[
@@ -97,119 +100,142 @@ static NSString *const kNotifyReady = @"com.messenger.injector.ready";
         [groupLabel.centerYAnchor constraintEqualToAnchor:groupRow.centerYAnchor],
         [self.groupSwitch.trailingAnchor constraintEqualToAnchor:groupRow.trailingAnchor],
         [self.groupSwitch.centerYAnchor constraintEqualToAnchor:groupRow.centerYAnchor],
-        [groupRow.heightAnchor constraintEqualToConstant:32],
+        [groupRow.heightAnchor constraintEqualToConstant:30],
     ]];
 
-    // Send button
-    self.sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.sendButton setTitle:@"Send Message" forState:UIControlStateNormal];
-    self.sendButton.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
-    self.sendButton.backgroundColor = [UIColor systemBlueColor];
-    [self.sendButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.sendButton.layer.cornerRadius = 10;
-    [self.sendButton addTarget:self action:@selector(sendTapped) forControlEvents:UIControlEventTouchUpInside];
-    self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sendButton = [self makeButton:@"Send Message" color:[UIColor systemBlueColor] action:@selector(sendTapped)];
 
-    // Dump button
-    self.dumpButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.dumpButton setTitle:@"Dump View Hierarchy (Debug)" forState:UIControlStateNormal];
-    self.dumpButton.titleLabel.font = [UIFont systemFontOfSize:14];
-    self.dumpButton.backgroundColor = [UIColor secondarySystemBackgroundColor];
-    [self.dumpButton addTarget:self action:@selector(dumpTapped) forControlEvents:UIControlEventTouchUpInside];
-    self.dumpButton.layer.cornerRadius = 10;
-    self.dumpButton.translatesAutoresizingMaskIntoConstraints = NO;
+    // --- Section: Debug / Schema (v1.1) ---
+    UILabel *debugSection = [self sectionLabel:@"Debug & Schema Dump"];
 
-    // Status label
+    self.dumpViewButton = [self makeButton:@"Dump View Hierarchy" color:[UIColor secondarySystemBackgroundColor] action:@selector(dumpViewTapped)];
+    self.findDBButton   = [self makeButton:@"Find Database"       color:[UIColor secondarySystemBackgroundColor] action:@selector(findDBTapped)];
+    self.dumpSchemaButton = [self makeButton:@"Dump DB Schema"    color:[UIColor systemOrangeColor] action:@selector(dumpSchemaTapped)];
+    self.dumpSampleButton = [self makeButton:@"Dump Sample Data"  color:[UIColor systemOrangeColor] action:@selector(dumpSampleTapped)];
+
+    // Status
     self.statusLabel = [[UILabel alloc] init];
     self.statusLabel.text = @"Waiting for dylib...";
-    self.statusLabel.font = [UIFont systemFontOfSize:13];
+    self.statusLabel.font = [UIFont systemFontOfSize:12];
     self.statusLabel.textColor = [UIColor secondaryLabelColor];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
+    self.statusLabel.numberOfLines = 0;
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     // Layout
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
-        title, self.threadField, self.messageField, groupRow,
-        self.sendButton, self.dumpButton, self.statusLabel
+        title,
+        sendSection,
+        self.threadField,
+        self.messageField,
+        groupRow,
+        self.sendButton,
+        debugSection,
+        self.dumpViewButton,
+        self.findDBButton,
+        self.dumpSchemaButton,
+        self.dumpSampleButton,
+        self.statusLabel
     ]];
     stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 14;
+    stack.spacing = 10;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack];
+    [self.view addSubview:stack]);
 
     [NSLayoutConstraint activateConstraints:@[
         [stack.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
-        [self.sendButton.heightAnchor constraintEqualToConstant:50],
-        [self.dumpButton.heightAnchor constraintEqualToConstant:44],
+        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
+        [self.sendButton.heightAnchor constraintEqualToConstant:46],
+        [self.dumpViewButton.heightAnchor constraintEqualToConstant:40],
+        [self.findDBButton.heightAnchor constraintEqualToConstant:40],
+        [self.dumpSchemaButton.heightAnchor constraintEqualToConstant:40],
+        [self.dumpSampleButton.heightAnchor constraintEqualToConstant:40],
     ]];
 
-    // Listen for dylib ready notification
+    // Listen for dylib ready
     [[NSDistributedNotificationCenter defaultCenter]
         addObserverForName:kNotifyReady
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *note) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                self.statusLabel.text = @"✅ Dylib ready";
+                NSString *ver = note.userInfo[@"version"] ?: @"?";
+                self.statusLabel.text = [NSString stringWithFormat:@"\u{1F7E2} Dylib v%@ ready", ver];
                 self.statusLabel.textColor = [UIColor systemGreenColor];
             });
         }];
 }
 
+// --- Helpers ---
+- (UILabel *)sectionLabel:(NSString *)text {
+    UILabel *l = [[UILabel alloc] init];
+    l.text = text;
+    l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    l.textColor = [UIColor tertiaryLabelColor];
+    l.translatesAutoresizingMaskIntoConstraints = NO;
+    return l;
+}
+
+- (UIButton *)makeButton:(NSString *)title color:(UIColor *)bg action:(SEL)action {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    [b setTitle:title forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    b.backgroundColor = bg;
+    [b setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+    b.layer.cornerRadius = 8;
+    b.translatesAutoresizingMaskIntoConstraints = NO;
+    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+// --- Actions ---
 - (void)sendTapped {
     [self.view endEditing:YES];
-
     NSString *threadId = self.threadField.text ?: @"";
     NSString *message  = self.messageField.text ?: @"";
-    BOOL isGroup = self.groupSwitch.isOn;
-
-    if (threadId.length == 0) {
-        [self flashStatus:@"Enter a thread ID" red:YES];
-        return;
-    }
-    if (message.length == 0) {
-        [self flashStatus:@"Enter a message" red:YES];
-        return;
-    }
-
-    NSDictionary *userInfo = @{
-        @"message":  message,
-        @"threadId": threadId,
-        @"isGroup":  @(isGroup),
-    };
+    if (threadId.length == 0) { [self flash:@"Enter thread ID" red:YES]; return; }
+    if (message.length == 0)  { [self flash:@"Enter message" red:YES]; return; }
 
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifySend
                       object:nil
-                    userInfo:userInfo
+                    userInfo:@{@"message": message, @"threadId": threadId, @"isGroup": @(self.groupSwitch.isOn)}
             deliverImmediately:YES];
-
-    [self flashStatus:[NSString stringWithFormat:@"Trigger sent → thread %@", threadId] red:NO];
-
-    // Clear message field
+    [self flash:[NSString stringWithFormat:@"\u{2192} send: thread=%@", threadId] red:NO];
     self.messageField.text = @"";
 }
 
-- (void)dumpTapped {
+- (void)dumpViewTapped {
     [self.view endEditing:YES];
-    [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyDump
-                      object:nil
-                    userInfo:@{}
-            deliverImmediately:YES];
-    [self flashStatus:@"Dump trigger sent" red:NO];
+    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyDump object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\u{2192} dump view hierarchy" red:NO];
+}
+
+- (void)findDBTapped {
+    [self.view endEditing:YES];
+    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyFindDB object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\u{2192} find database..." red:NO];
+}
+
+- (void)dumpSchemaTapped {
+    [self.view endEditing:YES];
+    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyDumpSchema object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\u{2192} dumping schema..." red:NO];
+}
+
+- (void)dumpSampleTapped {
+    [self.view endEditing:YES];
+    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyDumpSample object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\u{2192} dumping sample data..." red:NO];
 }
 
 - (void)groupToggled:(UISwitch *)sw {
-    self.threadField.placeholder = sw.isOn
-        ? @"Group thread fbId"
-        : @"User ID (1-on-1)";
+    self.threadField.placeholder = sw.isOn ? @"Group thread fbId" : @"User ID (1-on-1)";
 }
 
-- (void)flashStatus:(NSString *)msg red:(BOOL)red {
+- (void)flash:(NSString *)msg red:(BOOL)red {
     self.statusLabel.text = msg;
     self.statusLabel.textColor = red ? [UIColor systemRedColor] : [UIColor systemGreenColor];
 }
@@ -233,11 +259,9 @@ static NSString *const kNotifyReady = @"com.messenger.injector.ready";
 - (BOOL)application:(UIApplication *)app
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-
     MIHelperVC *vc = [[MIHelperVC alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
     nav.navigationBar.prefersLargeTitles = YES;
-
     self.window.rootViewController = nav;
     [self.window makeKeyAndVisible];
     return YES;
@@ -245,9 +269,6 @@ static NSString *const kNotifyReady = @"com.messenger.injector.ready";
 
 @end
 
-// ============================================================
-// main
-// ============================================================
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         return UIApplicationMain(argc, argv, nil,
