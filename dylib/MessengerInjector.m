@@ -332,7 +332,7 @@ static void MI_dumpSample(NSString *dbPath) {
 
         MI_write(fh, [NSString stringWithFormat:@"\n=== %@ (3 rows, name match) ===\n", tn]);
         NSString *q = [NSString stringWithFormat:@"SELECT * FROM %@ LIMIT 3",
-                       [tn stringByReplacingOccurrencesOfString:@""" withString:@"\"\""]];
+                       [tn stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""]];
         sqlite3_stmt *s = NULL;
         if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) != SQLITE_OK) continue;
         int cc = sqlite3_column_count(s);
