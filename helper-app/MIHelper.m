@@ -43,13 +43,15 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 // View controller
 // ============================================================
 @interface MIHelperVC : UIViewController <UITextFieldDelegate>
+{
+    NSString *_resultText;
+}
 @property (nonatomic, strong) UITextField *threadField;
 @property (nonatomic, strong) UITextField *messageField;
 @property (nonatomic, strong) UISwitch *groupSwitch;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *copyBtn;
-@property (nonatomic, strong) NSString *resultText;
 @end
 
 @implementation MIHelperVC
@@ -58,7 +60,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     self.title = @"MI Helper v1.2";
-    self.resultText = @"";
+    _resultText = @"";
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -180,8 +182,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *tag = note.userInfo[@"tag"] ?: @"result";
                 NSString *text = note.userInfo[@"text"] ?: @"(empty)";
-                self.resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
-                self.resultsView.text = self.resultText;
+                _resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
+                self.resultsView.text = _resultText;
                 [self.resultsView scrollRangeToVisible:NSMakeRange(0, 0)];
             });
         }];
@@ -269,8 +271,8 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 }
 
 - (void)copyTapped {
-    if (self.resultText.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
-    [UIPasteboard generalPasteboard].string = self.resultText;
+    if (_resultText.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
+    [UIPasteboard generalPasteboard].string = _resultText;
     [self flash:@"\u2705 Copied to clipboard" red:NO];
 }
 
