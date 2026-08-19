@@ -1,0 +1,127 @@
+name: Build Messenger Injector
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dylib/**'
+      - 'helper-app/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14   # M1 Mac, free for public repos. Has Xcode 15.x with iOS 17 SDK.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build dylib
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+
+          xcrun clang -dynamiclib \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -framework Foundation \
+            -framework UIKit \
+            -ObjC \
+            -fobjc-arc \
+            -O2 \
+            -o dylib/libMessengerInjector.dylib \
+            dylib/MessengerInjector.m
+
+          echo "Built dylib:"
+          file dylib/libMessengerInjector.dylib
+          ls -la dylib/libMessengerInjector.dylib
+
+      - name: Sign dylib (ad-hoc)
+        run: |
+          codesign -f -s - dylib/libMessengerInjector.dylib
+          codesign -v dylib/libMessengerInjector.dylib
+          echo "Dylib signed and verified."
+
+      - name: Build helper app binary
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
+          xcrun clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -framework Foundation \
+            -framework UIKit \
+            -ObjC \
+            -fobjc-arc \
+            -O2 \
+            -o helper-app/MIHelper \
+            helper-app/MIHelper.m
+
+          echo "Built helper binary:"
+          file helper-app/MIHelper
+          ls -la helper-app/MIHelper
+
+      - name: Create IPA
+        run: |
+          mkdir -p build/Payload/MIHelper.app
+          cp helper-app/MIHelper build/Payload/MIHelper.app/
+          cp helper-app/Info.plist build/Payload/MIHelper.app/
+
+          # Ad-hoc sign the app bundle
+          codesign -f -s - build/Payload/MIHelper.app
+          codesign -v build/Payload/MIHelper.app
+
+          # Create IPA
+          cd build
+          zip -r ../MIHelper_1.0.ipa Payload/
+          cd ..
+
+          echo "Created IPA:"
+          ls -la MIHelper_1.0.ipa
+          unzip -l MIHelper_1.0.ipa
+
+      - name: Verify artifacts
+        run: |
+          echo "=== Dylib ==="
+          file dylib/libMessengerInjector.dylib
+          otool -l dylib/libMessengerInjector.dylib | grep -A2 "LC_BUILD_VERSION" || true
+          otool -l dylib/libMessengerInjector.dylib | grep -A2 "LC_LOAD_DYLIB" | head -20
+
+          echo ""
+          echo "=== Helper App Binary ==="
+          file helper-app/MIHelper
+          otool -l helper-app/MIHelper | grep -A2 "LC_BUILD_VERSION" || true
+
+          echo ""
+          echo "=== IPA Contents ==="
+          unzip -l MIHelper_1.0.ipa
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: messenger-injector-build
+          path: |
+            dylib/libMessengerInjector.dylib
+            MIHelper_1.0.ipa
+          retention-days: 90
+
+      - name: Create Release (on tag or manual)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dylib/libMessengerInjector.dylib
+            MIHelper_1.0.ipa
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,27 @@
+# Xcode
+xcuserdata/
+*.xcworkspace/
+!*.xcworkspace/xcsharedata/
+DerivedData/
+build/
+dist/
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.dylib
+*.ipa
+*.tipa
+!TrollFools_4.3-253.tipa
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Override global *.md ignore for project docs
+!docs/*.md
+!README.md
