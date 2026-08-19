@@ -22,10 +22,23 @@
  */
 
 #import <Foundation/Foundation.h>
-#import <Foundation/NSDistributedNotificationCenter.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+// NSDistributedNotificationCenter is not exposed in the iOS SDK umbrella header.
+// Declare the interface we need directly.
+@interface NSDistributedNotificationCenter : NSObject
++ (instancetype)defaultCenter;
+- (void)addObserverForName:(NSNotificationName)aName
+                    object:(id)object
+                     queue:(NSOperationQueue *)queue
+                usingBlock:(void (^)(NSNotification *note))block;
+- (void)postNotificationName:(NSNotificationName)aName
+                      object:(id)object
+                    userInfo:(NSDictionary <NSObject *, NSObject *> * _Nullable)userInfo
+        deliverImmediately:(BOOL)deliverImmediately;
+@end
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
