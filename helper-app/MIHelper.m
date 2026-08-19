@@ -140,7 +140,7 @@ static NSString *const kNotifyDumpSample = @"com.messenger.injector.dumpSample";
     stack.axis = UILayoutConstraintAxisVertical;
     stack.spacing = 10;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack]);
+    [self.view addSubview:stack];
 
     [NSLayoutConstraint activateConstraints:@[
         [stack.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
