@@ -111,61 +111,78 @@ static NSString *MI_findDatabase(void) {
     if (gFoundDBPath.length > 0) return gFoundDBPath;
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSMutableArray<NSString *> *paths = [NSMutableArray array];
-
     NSString *home = NSHomeDirectory();
-    [paths addObject:[home stringByAppendingPathComponent:@"Library"]];
-    [paths addObject:[home stringByAppendingPathComponent:@"Documents"]];
-    [paths addObject:home];
+    MI_log(@"DB search: home=%@", home);
 
+    NSMutableArray<NSString *> *allDBs = [NSMutableArray array];
+
+    // Recursive search for .db files in the app's sandbox
+    NSArray *searchRoots = @[
+        [home stringByAppendingPathComponent:@"Library"],
+        [home stringByAppendingPathComponent:@"Documents"],
+        home
+    ];
+
+    for (NSString *root in searchRoots) {
+        if (![fm fileExistsAtPath:root]) continue;
+        NSDirectoryEnumerator *enum = [fm enumeratorAtPath:root];
+        NSString *rel;
+        while ((rel = [enum nextObject])) {
+            if (![rel hasSuffix:@".db"]) continue;
+            NSString *full = [root stringByAppendingPathComponent:rel];
+            [allDBs addObject:full];
+        }
+    }
+
+    // Also search AppGroup shared containers
     NSString *sharedBase = @"/var/mobile/Containers/Shared/AppGroup";
     NSArray *groups = [fm contentsOfDirectoryAtPath:sharedBase error:nil];
+    MI_log(@"DB search: %d AppGroups found", (int)groups.count);
     for (NSString *g in groups) {
-        NSString *p = [sharedBase stringByAppendingPathComponent:g];
-        [paths addObject:p];
-        [paths addObject:[p stringByAppendingPathComponent:@"Library"]];
-        [paths addObject:[p stringByAppendingPathComponent:@"Database"]];
-    }
-
-    NSString *appBase = @"/var/mobile/Containers/Application";
-    NSArray *apps = [fm contentsOfDirectoryAtPath:appBase error:nil];
-    for (NSString *a in apps) {
-        NSString *p = [appBase stringByAppendingPathComponent:a];
-        [paths addObject:[p stringByAppendingPathComponent:@"Library"]];
-        [paths addObject:[p stringByAppendingPathComponent:@"Documents"]];
-    }
-
-    NSMutableSet<NSString *> *found = [NSMutableSet set];
-    for (NSString *bp in paths) {
-        if (![fm fileExistsAtPath:bp]) continue;
-        NSArray *files = [fm contentsOfDirectoryAtPath:bp error:nil];
-        for (NSString *f in files) {
-            if ([f hasPrefix:@"lightspeed-"] && [f hasSuffix:@".db"]) {
-                NSString *full = [bp stringByAppendingPathComponent:f];
-                [found addObject:full];
-                MI_log(@"DB: %@", full);
-            }
-        }
-        for (NSString *f in files) {
-            NSString *sp = [bp stringByAppendingPathComponent:f];
-            BOOL isDir = NO;
-            if (![fm fileExistsAtPath:sp isDirectory:&isDir] || !isDir) continue;
-            NSArray *sub = [fm contentsOfDirectoryAtPath:sp error:nil];
-            for (NSString *sf in sub) {
-                if ([sf hasPrefix:@"lightspeed-"] && [sf hasSuffix:@".db"]) {
-                    [found addObject:[sp stringByAppendingPathComponent:sf]];
-                }
-            }
+        NSString *gp = [sharedBase stringByAppendingPathComponent:g];
+        NSDirectoryEnumerator *enum = [fm enumeratorAtPath:gp];
+        NSString *rel;
+        while ((rel = [enum nextObject])) {
+            if (![rel hasSuffix:@".db"]) continue;
+            [allDBs addObject:[gp stringByAppendingPathComponent:rel]];
         }
     }
 
-    if (found.count > 0) {
-        gFoundDBPath = found.allObjects.firstObject;
-        NSDictionary *attrs = [fm attributesOfItemAtPath:gFoundDBPath error:nil];
+    MI_log(@"DB search: %d .db files total", (int)allDBs.count);
+    for (NSString *db in allDBs) {
+        NSDictionary *attrs = [fm attributesOfItemAtPath:db error:nil];
         unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
-        MI_log(@"DB selected: %@ (%.1f MB)", gFoundDBPath, sz / 1048576.0);
+        MI_log(@"  DB: %@ (%.1f KB)", db, sz / 1024.0);
+    }
+
+    // Priority: lightspeed-*.db > msys*.db > messaging*.db > largest .db
+    NSString *best = nil;
+    for (NSString *db in allDBs) {
+        if ([db containsString:@"lightspeed"]) { best = db; break; }
+    }
+    if (!best) for (NSString *db in allDBs) {
+        if ([db containsString:@"msys"]) { best = db; break; }
+    }
+    if (!best) for (NSString *db in allDBs) {
+        if ([db containsString:@"messaging"] || [db containsString:@"message"]) { best = db; break; }
+    }
+    if (!best && allDBs.count > 0) {
+        // Pick the largest .db file
+        unsigned long long maxSz = 0;
+        for (NSString *db in allDBs) {
+            NSDictionary *attrs = [fm attributesOfItemAtPath:db error:nil];
+            unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+            if (sz > maxSz) { maxSz = sz; best = db; }
+        }
+    }
+
+    if (best) {
+        gFoundDBPath = best;
+        NSDictionary *attrs = [fm attributesOfItemAtPath:best error:nil];
+        unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+        MI_log(@"DB selected: %@ (%.1f MB)", best, sz / 1048576.0);
     } else {
-        MI_log(@"DB: not found. home=%@", home);
+        MI_log(@"DB: NO .db files found anywhere");
     }
     return gFoundDBPath;
 }
@@ -511,9 +528,9 @@ static void MI_hFindDB(void) {
             NSFileManager *fm = [NSFileManager defaultManager];
             NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
             unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
-            MI_postResult(@"findDB", [NSString stringWithFormat:@"DB: %@\nSize: %.1f MB", path, sz / 1048576.0]);
+            MI_postResult(@"findDB", [NSString stringWithFormat:@"SELECTED: %@\nSize: %.1f MB\n\n(see Console for full .db list)", path, sz / 1048576.0]);
         } else {
-            MI_postResult(@"findDB", @"No lightspeed-*.db found in any search path.");
+            MI_postResult(@"findDB", @"No .db files found in app sandbox or AppGroup containers.\nCheck Console for search details.");
         }
     });
 }
