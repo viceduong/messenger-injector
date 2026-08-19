@@ -193,7 +193,7 @@ static void MI_dumpSchema(NSString *dbPath) {
 
     // Table definitions
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name", &st, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name", -1, &st, NULL) != SQLITE_OK) {
         MI_write(fh, [NSString stringWithFormat:@"PREPARE ERROR: %s\n", sqlite3_errmsg(db)]);
         [fh closeFile]; sqlite3_close(db); return;
     }
@@ -216,7 +216,7 @@ static void MI_dumpSchema(NSString *dbPath) {
     // Column details
     MI_write(fh, @"=== Column Details ===\n\n");
     st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &st, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             NSString *tn = MI_cstr(sqlite3_column_text(st, 0));
             sqlite3_finalize(st);
@@ -225,8 +225,8 @@ static void MI_dumpSchema(NSString *dbPath) {
             NSString *pq = [NSString stringWithFormat:@"PRAGMA table_info('%@')",
                            [tn stringByReplacingOccurrencesOfString:@"'" withString:@"''"]];
             sqlite3_stmt *cs = NULL;
-            if (sqlite3_prepare_v2(db, pq.UTF8String, &cs, NULL) != SQLITE_OK) {
-                sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &st, NULL);
+            if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &cs, NULL) != SQLITE_OK) {
+                sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL);
                 continue;
             }
             MI_write(fh, [NSString stringWithFormat:@"\nTable: %@\n", tn]);
@@ -242,7 +242,7 @@ static void MI_dumpSchema(NSString *dbPath) {
             }
             sqlite3_finalize(cs);
 
-            if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &st, NULL) != SQLITE_OK) break;
+            if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL) != SQLITE_OK) break;
         }
         if (st) sqlite3_finalize(st);
     }
@@ -277,7 +277,7 @@ static void MI_dumpSample(NSString *dbPath) {
     // All table names
     NSMutableArray<NSString *> *tables = [NSMutableArray array];
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &st, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) [tables addObject:MI_cstr(sqlite3_column_text(st, 0))];
         sqlite3_finalize(st);
     }
@@ -298,7 +298,7 @@ static void MI_dumpSample(NSString *dbPath) {
         MI_write(fh, [NSString stringWithFormat:@"\n=== %@ (5 rows) ===\n", tn]);
         NSString *q = [NSString stringWithFormat:@"SELECT * FROM %@ LIMIT 5", tn];
         sqlite3_stmt *s = NULL;
-        if (sqlite3_prepare_v2(db, q.UTF8String, &s, NULL) != SQLITE_OK) {
+        if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) != SQLITE_OK) {
             MI_write(fh, [NSString stringWithFormat:@"ERR: %s\n", sqlite3_errmsg(db)]);
             continue;
         }
@@ -334,7 +334,7 @@ static void MI_dumpSample(NSString *dbPath) {
         NSString *q = [NSString stringWithFormat:@"SELECT * FROM %@ LIMIT 3",
                        [tn stringByReplacingOccurrencesOfString:@""" withString:@"\"\""]];
         sqlite3_stmt *s = NULL;
-        if (sqlite3_prepare_v2(db, q.UTF8String, &s, NULL) != SQLITE_OK) continue;
+        if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) != SQLITE_OK) continue;
         int cc = sqlite3_column_count(s);
         while (sqlite3_step(s) == SQLITE_ROW) {
             for (int c = 0; c < cc; c++) {
