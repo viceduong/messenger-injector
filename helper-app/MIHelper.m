@@ -49,7 +49,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *copyBtn;
-@property (nonatomic, copy) NSString *resultText;
+@property (nonatomic, strong) NSString *resultText;
 @end
 
 @implementation MIHelperVC
