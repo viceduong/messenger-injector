@@ -92,7 +92,7 @@ static void MI_progress(NSString *step) {
     // Append to progress file
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:MI_progressFile()];
     if (!fh) {
-        [[NSString stringWithFormat:@"\n=== Session %@ ===\n", [NSDate date]] dataUsingEncoding:NSUTF8StringEncoding] writeToFile:MI_progressFile() atomically:YES];
+        [[[NSString stringWithFormat:@"\n=== Session %@ ===\n", [NSDate date]] dataUsingEncoding:NSUTF8StringEncoding] writeToFile:MI_progressFile() atomically:YES];
         fh = [NSFileHandle fileHandleForWritingAtPath:MI_progressFile()];
     }
     if (fh) {
