@@ -814,7 +814,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             NSMutableArray<NSString *> *senderIds = [NSMutableArray array];
             {
                 sqlite3_stmt *s = NULL;
-                NSString *q = [NSString stringWithFormat:@"SELECT DISTINCT sender_id FROM messages WHERE thread_key LIKE '%%%@%%' LIMIT 10", MI_esc(threadId)];
+                NSString *q = [NSString stringWithFormat:@"SELECT DISTINCT sender_id FROM messages WHERE thread_key = '%@' LIMIT 10", MI_esc(threadId)];
                 if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
                     while (sqlite3_step(s) == SQLITE_ROW) {
                         NSString *sid = MI_cstr(sqlite3_column_text(s, 0));
@@ -904,21 +904,24 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
             MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
 
-            // Step 6: Resolve thread_pk from client_messages (not client_threads — thread_key differs)
-            MI_progress(@"inject: resolving thread_pk from client_messages");
+            // Step 6: Resolve thread_pk by matching messages.offline_threading_id
+            // with client_messages.resonance_offline_threading_id for this thread_key
+            MI_progress(@"inject: resolving thread_pk via offline_threading_id");
             long long threadPk = 0;
             {
                 sqlite3_stmt *s = NULL;
-                // Find thread_pk from existing messages where either party sent a message
+                // Find a client_messages row whose resonance_offline_threading_id matches
+                // an offline_threading_id from messages WHERE thread_key = threadId
                 NSString *q = [NSString stringWithFormat:
-                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk IN ('%@', '%@') LIMIT 1",
-                    MI_esc(localUid), MI_esc(otherUid)];
+                    @"SELECT cm.thread_pk FROM client_messages cm "
+                    @"JOIN messages m ON cm.resonance_offline_threading_id = m.offline_threading_id "
+                    @"WHERE m.thread_key = '%@' LIMIT 1", MI_esc(threadId)];
                 if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
                     if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
                     sqlite3_finalize(s);
                 }
             }
-            // Fallback: try matching by thread_key in client_threads
+            // Fallback: try matching by thread_key in client_threads (may be -1 but try)
             if (threadPk == 0) {
                 sqlite3_stmt *s = NULL;
                 if (sqlite3_prepare_v2(db, "SELECT pk FROM client_threads WHERE thread_key = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
@@ -927,10 +930,25 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     sqlite3_finalize(s);
                 }
             }
-            // Last fallback: first thread_pk from client_messages
+            // Fallback: find thread_pk from client_messages where sender_contact_pk matches threadId
+            // (the threadId is the other person's FB ID, they sent messages in that thread)
             if (threadPk == 0) {
                 sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_pk FROM client_messages LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                NSString *q = [NSString stringWithFormat:
+                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 1",
+                    threadId.longLongValue];
+                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+            }
+            // Last resort: first thread_pk from client_messages where local user sent
+            if (threadPk == 0) {
+                sqlite3_stmt *s = NULL;
+                NSString *q = [NSString stringWithFormat:
+                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk IN ('%@', '%@') LIMIT 1",
+                    MI_esc(localUid), MI_esc(otherUid)];
+                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
                     if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
                     sqlite3_finalize(s);
                 }
@@ -938,7 +956,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld", threadPk]);
             [report appendFormat:@"thread_pk: %lld\n", threadPk];
 
-            // sender_contact_pk = FB user ID directly (no lookup needed — client_messages uses FB IDs as contact pks)
+            // sender_contact_pk = FB user ID directly
             long long localContactPk = localUid.longLongValue;
             long long otherContactPk = otherUid.longLongValue;
             [report appendFormat:@"sender_contact_pk: local=%lld, other=%lld\n", localContactPk, otherContactPk];
