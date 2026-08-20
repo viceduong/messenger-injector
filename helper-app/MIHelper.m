@@ -1,15 +1,15 @@
 /**
- * MIHelper v1.2 — Trigger app for MessengerInjector
+ * MIHelper v2.0 — Trigger app for MessengerInjector
  *
- * v1.2: Results display panel — shows dylib output on screen.
- *       Listen for com.messenger.injector.result notifications.
+ * v2.0: Conversation composer — compose multi-message conversations (Me/Them),
+ *        batch-inject into Messenger's local DB. Also: thread list, crash log.
  *
  * Build:
  *   xcrun clang -arch arm64 \
  *     -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
  *     -miphoneos-version-min=15.0 \
  *     -framework Foundation -framework UIKit \
- *     -ObjC -fobjc-arc -O2 \
+ *     -ObjC -fobjc-arc -O2 -Wno-cocoa-api-design \
  *     -o MIHelper MIHelper.m
  */
 
@@ -34,10 +34,102 @@
 static NSString *const kNotifySend       = @"com.messenger.injector.send";
 static NSString *const kNotifyDump       = @"com.messenger.injector.dump";
 static NSString *const kNotifyReady      = @"com.messenger.injector.ready";
-static NSString *const kNotifyFindDB     = @"com.messenger.injector.findDB";
-static NSString *const kNotifyDumpSchema = @"com.messenger.injector.dumpSchema";
-static NSString *const kNotifyDumpSample = @"com.messenger.injector.dumpSample";
 static NSString *const kNotifyResult     = @"com.messenger.injector.result";
+static NSString *const kNotifyFindDB     = @"com.messenger.injector.findDB";
+static NSString *const kNotifySchema  = @"com.messenger.injector.dumpSchema";
+static NSString *const kNotifySample  = @"com.messenger.injector.dumpSample";
+static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
+static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
+static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
+
+// ============================================================
+// Message row view (one composer row)
+// ============================================================
+@interface MIMessageRow : UIView
+@property (nonatomic, assign) BOOL isMe; // YES=me (right bubble), NO=them (left bubble)
+@property (nonatomic, strong) UISegmentedControl *sideControl;
+@property (nonatomic, strong) UITextField *textField;
+@property (nonatomic, strong) UITextField *minAgoField;
+@property (nonatomic, strong) UIButton *deleteBtn;
+@property (nonatomic, copy) void (^onDelete)(MIMessageRow *row);
+@end
+
+@implementation MIMessageRow
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        self.backgroundColor = [UIColor secondarySystemBackgroundColor];
+        self.layer.cornerRadius = 8;
+        _isMe = YES;
+
+        _sideControl = [[UISegmentedControl alloc] initWithItems:@[@"Me", @"Them"]];
+        _sideControl.translatesAutoresizingMaskIntoConstraints = NO;
+        _sideControl.selectedSegmentIndex = 0;
+        _sideControl.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        [_sideControl addTarget:self action:@selector(sideChanged:) forControlEvents:UIControlEventValueChanged];
+
+        _textField = [[UITextField alloc] init];
+        _textField.translatesAutoresizingMaskIntoConstraints = NO;
+        _textField.placeholder = @"Message text...";
+        _textField.borderStyle = UITextBorderStyleRoundedRect;
+        _textField.font = [UIFont systemFontOfSize:14];
+        _textField.autocorrectionType = UITextAutocorrectionTypeNo;
+
+        _minAgoField = [[UITextField alloc] init];
+        _minAgoField.translatesAutoresizingMaskIntoConstraints = NO;
+        _minAgoField.placeholder = @"min ago";
+        _minAgoField.borderStyle = UITextBorderStyleRoundedRect;
+        _minAgoField.font = [UIFont systemFontOfSize:12];
+        _minAgoField.keyboardType = UIKeyboardTypeNumberPad;
+        _minAgoField.textAlignment = NSTextAlignmentCenter;
+        [_minAgoField.widthAnchor constraintEqualToConstant:65].active = YES;
+
+        _deleteBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        _deleteBtn.translatesAutoresizingMaskIntoConstraints = NO;
+        [_deleteBtn setTitle:@"\u2715" forState:UIControlStateNormal];
+        _deleteBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+        _deleteBtn.tintColor = [UIColor systemRedColor];
+        [_deleteBtn addTarget:self action:@selector(deleteTapped) forControlEvents:UIControlEventTouchUpInside];
+        [_deleteBtn.widthAnchor constraintEqualToConstant:32].active = YES;
+
+        [self addSubview:_sideControl];
+        [self addSubview:_minAgoField];
+        [self addSubview:_deleteBtn];
+        [self addSubview:_textField];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [_sideControl.topAnchor constraintEqualToAnchor:self.topAnchor constant:6],
+            [_sideControl.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
+            [_sideControl.widthAnchor constraintEqualToConstant:100],
+            [_sideControl.heightAnchor constraintEqualToConstant:28],
+
+            [_minAgoField.centerYAnchor constraintEqualToAnchor:_sideControl.centerYAnchor],
+            [_minAgoField.leadingAnchor constraintEqualToAnchor:_sideControl.trailingAnchor constant:8],
+
+            [_deleteBtn.centerYAnchor constraintEqualToAnchor:_sideControl.centerYAnchor],
+            [_deleteBtn.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
+
+            [_textField.topAnchor constraintEqualToAnchor:_sideControl.bottomAnchor constant:6],
+            [_textField.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
+            [_textField.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
+            [_textField.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-6],
+            [_textField.heightAnchor constraintEqualToConstant:34],
+        ]];
+    }
+    return self;
+}
+
+- (void)sideChanged:(UISegmentedControl *)c {
+    _isMe = (c.selectedSegmentIndex == 0);
+}
+
+- (void)deleteTapped {
+    if (_onDelete) _onDelete(self);
+}
+
+@end
 
 // ============================================================
 // View controller
@@ -47,11 +139,14 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     NSString *_resultText;
 }
 @property (nonatomic, strong) UITextField *threadField;
-@property (nonatomic, strong) UITextField *messageField;
 @property (nonatomic, strong) UISwitch *groupSwitch;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *btnCopy;
+
+// Composer
+@property (nonatomic, strong) UIStackView *messageStack;
+@property (nonatomic, strong) NSMutableArray<MIMessageRow *> *messageRows;
 @end
 
 @implementation MIHelperVC
@@ -59,12 +154,14 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
-    self.title = @"MI Helper v1.2";
+    self.title = @"MI Helper v2.0";
     _resultText = @"";
+    _messageRows = [NSMutableArray array];
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.showsVerticalScrollIndicator = YES;
+    scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     [self.view addSubview:scroll];
 
     UIStackView *stack = [[UIStackView alloc] init];
@@ -84,11 +181,12 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     self.statusLabel.font = [UIFont systemFontOfSize:13];
     self.statusLabel.textColor = [UIColor secondaryLabelColor];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
+    self.statusLabel.numberOfLines = 0;
 
-    // --- Send Message ---
-    UILabel *sendSec = [self sec:@"Send Message (UI Automation)"];
-    self.threadField = [self makeField:@"Thread ID (user_id or group fbId)" UIKeyboardType:UIKeyboardTypeNumberPad];
-    self.messageField = [self makeField:@"Message to send" UIKeyboardType:UIKeyboardTypeDefault];
+    // === Conversation Composer ===
+    UILabel *compSec = [self sec:@"Conversation Composer"];
+
+    self.threadField = [self makeField:@"Thread ID (e.g. user_id)" UIKeyboardType:UIKeyboardTypeDefault];
 
     UIView *groupRow = [[UIView alloc] init];
     groupRow.translatesAutoresizingMaskIntoConstraints = NO;
@@ -98,7 +196,6 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     gL.translatesAutoresizingMaskIntoConstraints = NO;
     self.groupSwitch = [[UISwitch alloc] init];
     self.groupSwitch.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.groupSwitch addTarget:self action:@selector(groupToggled:) forControlEvents:UIControlEventValueChanged];
     [groupRow addSubview:gL];
     [groupRow addSubview:self.groupSwitch];
     [NSLayoutConstraint activateConstraints:@[
@@ -109,16 +206,31 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
         [groupRow.heightAnchor constraintEqualToConstant:30],
     ]];
 
-    UIButton *sendBtn = [self makeBtn:@"Send Message" bg:[UIColor systemBlueColor] act:@selector(sendTapped) h:44];
+    // Message rows stack
+    self.messageStack = [[UIStackView alloc] init];
+    self.messageStack.axis = UILayoutConstraintAxisVertical;
+    self.messageStack.spacing = 8;
+    self.messageStack.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // --- Debug ---
-    UILabel *dbgSec = [self sec:@"Debug & Schema Dump"];
-    UIButton *findDBBtn   = [self makeBtn:@"Find Database"     bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped)   h:40];
-    UIButton *schemaBtn   = [self makeBtn:@"Dump DB Schema"    bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
-    UIButton *sampleBtn   = [self makeBtn:@"Dump Sample Data"  bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
-    UIButton *dumpViewBtn = [self makeBtn:@"Dump View Hierarchy" bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
+    // Add initial row
+    [self addMessageRow];
 
-    // --- Results ---
+    // Add row button
+    UIButton *addBtn = [self makeBtn:@"+ Add Message" bg:[UIColor systemGray3Color] act:@selector(addRowTapped) h:36];
+
+    // Inject button
+    UIButton *injectBtn = [self makeBtn:@"\U0001F851 Inject Conversation" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:48];
+
+    // === Debug ===
+    UILabel *dbgSec = [self sec:@"Debug & Diagnostics"];
+    UIButton *findDBBtn   = [self makeBtn:@"Find Database"       bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped)   h:40];
+    UIButton *schemaBtn   = [self makeBtn:@"Dump DB Schema"       bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
+    UIButton *sampleBtn   = [self makeBtn:@"Dump Sample Data"     bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
+    UIButton *threadsBtn  = [self makeBtn:@"List Threads"         bg:[UIColor systemTealColor] act:@selector(threadsTapped) h:40];
+    UIButton *crashBtn    = [self makeBtn:@"Get Crash Log"        bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
+    UIButton *dumpViewBtn = [self makeBtn:@"Dump View Hierarchy"  bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
+
+    // === Results ===
     UILabel *resSec = [self sec:@"Results"];
     self.resultsView = [[UITextView alloc] init];
     self.resultsView.editable = NO;
@@ -127,21 +239,24 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     self.resultsView.layer.cornerRadius = 8;
     self.resultsView.text = @"Tap a button above, results appear here.";
     self.resultsView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.resultsView.heightAnchor constraintEqualToConstant:200].active = YES;
+    [self.resultsView.heightAnchor constraintEqualToConstant:250].active = YES;
 
     self.btnCopy = [self makeBtn:@"Copy Results" bg:[UIColor systemGreenColor] act:@selector(copyTapped) h:36];
 
     [stack addArrangedSubview:title];
     [stack addArrangedSubview:self.statusLabel];
-    [stack addArrangedSubview:sendSec];
+    [stack addArrangedSubview:compSec];
     [stack addArrangedSubview:self.threadField];
-    [stack addArrangedSubview:self.messageField];
     [stack addArrangedSubview:groupRow];
-    [stack addArrangedSubview:sendBtn];
+    [stack addArrangedSubview:self.messageStack];
+    [stack addArrangedSubview:addBtn];
+    [stack addArrangedSubview:injectBtn];
     [stack addArrangedSubview:dbgSec];
     [stack addArrangedSubview:findDBBtn];
     [stack addArrangedSubview:schemaBtn];
     [stack addArrangedSubview:sampleBtn];
+    [stack addArrangedSubview:threadsBtn];
+    [stack addArrangedSubview:crashBtn];
     [stack addArrangedSubview:dumpViewBtn];
     [stack addArrangedSubview:resSec];
     [stack addArrangedSubview:self.resultsView];
@@ -187,6 +302,75 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
                 [self.resultsView scrollRangeToVisible:NSMakeRange(0, 0)];
             });
         }];
+
+    // Add a done button to dismiss keyboard
+    UIBarButtonItem *doneBtn = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                                    target:self
+                                                                    action:@selector(dismissKeyboard)];
+    UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIToolbar *kbToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+    kbToolbar.items = @[flexSpace, doneBtn];
+    self.threadField.inputAccessoryView = kbToolbar;
+    for (MIMessageRow *row in _messageRows) {
+        row.textField.inputAccessoryView = kbToolbar;
+        row.minAgoField.inputAccessoryView = kbToolbar;
+    }
+}
+
+// --- Message row management ---
+- (void)addMessageRow {
+    MIMessageRow *row = [[MIMessageRow alloc] init];
+    __weak typeof(self) weakSelf = self;
+    row.onDelete = ^(MIMessageRow *r) {
+        [weakSelf removeMessageRow:r];
+    };
+    [_messageRows addObject:row];
+    [_messageStack addArrangedSubview:row];
+
+    // Wire keyboard toolbar
+    UIToolbar *kbToolbar = (UIToolbar *)self.threadField.inputAccessoryView;
+    row.textField.inputAccessoryView = kbToolbar;
+    row.minAgoField.inputAccessoryView = kbToolbar;
+}
+
+- (void)removeMessageRow:(MIMessageRow *)row {
+    [_messageStack removeArrangedSubview:row];
+    [row removeFromSuperview];
+    [_messageRows removeObject:row];
+    if (_messageRows.count == 0) [self addMessageRow];
+}
+
+- (void)addRowTapped {
+    [self addMessageRow];
+    [self flash:[NSString stringWithFormat:@"Row %d added", (int)_messageRows.count] red:NO];
+}
+
+- (void)injectTapped {
+    [self.view endEditing:YES];
+    NSString *tid = self.threadField.text ?: @"";
+    if (tid.length == 0) { [self flash:@"Enter thread ID" red:YES]; return; }
+
+    NSMutableArray *messages = [NSMutableArray array];
+    for (int i = 0; i < (int)_messageRows.count; i++) {
+        MIMessageRow *row = _messageRows[i];
+        NSString *text = row.textField.text ?: @"";
+        if (text.length == 0) continue;
+        NSString *side = row.isMe ? @"me" : @"them";
+        NSString *minAgoStr = row.minAgoField.text ?: @"";
+        int minAgo = minAgoStr.length > 0 ? [minAgoStr intValue] : (int)(_messageRows.count - i);
+        if (minAgo < 0) minAgo = 0;
+        [messages addObject:@{@"s": side, @"t": text, @"m": @(minAgo)}];
+    }
+
+    if (messages.count == 0) { [self flash:@"No messages to inject" red:YES]; return; }
+
+    self.resultsView.text = [NSString stringWithFormat:@"Injecting %d messages...", (int)messages.count];
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyInject
+                      object:nil
+                    userInfo:@{@"threadId": tid, @"messages": messages}
+            deliverImmediately:YES];
+    [self flash:[NSString stringWithFormat:@"\U0001F851 inject %d msgs → %@", (int)messages.count, tid] red:NO];
 }
 
 // --- Helpers ---
@@ -205,6 +389,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     f.font = [UIFont systemFontOfSize:14];
     f.keyboardType = kt;
     f.autocorrectionType = UITextAutocorrectionTypeNo;
+    f.translatesAutoresizingMaskIntoConstraints = NO;
     f.delegate = self;
     return f;
 }
@@ -222,22 +407,7 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     return b;
 }
 
-// --- Actions ---
-- (void)sendTapped {
-    [self.view endEditing:YES];
-    NSString *tid = self.threadField.text ?: @"";
-    NSString *msg = self.messageField.text ?: @"";
-    if (tid.length == 0) { [self flash:@"Enter thread ID" red:YES]; return; }
-    if (msg.length == 0)  { [self flash:@"Enter message" red:YES]; return; }
-    [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifySend
-                      object:nil
-                    userInfo:@{@"message": msg, @"threadId": tid, @"isGroup": @(self.groupSwitch.isOn)}
-            deliverImmediately:YES];
-    [self flash:[NSString stringWithFormat:@"\U0001F851 send: thread=%@", tid] red:NO];
-    self.messageField.text = @"";
-}
-
+// --- Debug Actions ---
 - (void)findDBTapped {
     [self.view endEditing:YES];
     self.resultsView.text = @"Searching for database...";
@@ -250,16 +420,32 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
     [self.view endEditing:YES];
     self.resultsView.text = @"Dumping schema... (may take a few seconds)";
     [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyDumpSchema object:nil userInfo:@{} deliverImmediately:YES];
+        postNotificationName:kNotifySchema object:nil userInfo:@{} deliverImmediately:YES];
     [self flash:@"\U0001F851 dumpSchema" red:NO];
 }
 
 - (void)dumpSampleTapped {
     [self.view endEditing:YES];
-    self.resultsView.text = @"Dumping sample data... (may take a few seconds)";
+    self.resultsView.text = @"Dumping sample data...";
     [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyDumpSample object:nil userInfo:@{} deliverImmediately:YES];
+        postNotificationName:kNotifySample object:nil userInfo:@{} deliverImmediately:YES];
     [self flash:@"\U0001F851 dumpSample" red:NO];
+}
+
+- (void)threadsTapped {
+    [self.view endEditing:YES];
+    self.resultsView.text = @"Listing threads...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\U0001F851 threads" red:NO];
+}
+
+- (void)crashTapped {
+    [self.view endEditing:YES];
+    self.resultsView.text = @"Fetching crash log...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyCrash object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\U0001F851 crashLog" red:NO];
 }
 
 - (void)dumpViewTapped {
@@ -273,11 +459,11 @@ static NSString *const kNotifyResult     = @"com.messenger.injector.result";
 - (void)copyTapped {
     if (_resultText.length == 0) { [self flash:@"Nothing to copy" red:YES]; return; }
     [UIPasteboard generalPasteboard].string = _resultText;
-    [self flash:@"\u2705 Copied to clipboard" red:NO];
+    [self flash:@"\u2705 Copied" red:NO];
 }
 
-- (void)groupToggled:(UISwitch *)sw {
-    self.threadField.placeholder = sw.isOn ? @"Group thread fbId" : @"User ID (1-on-1)";
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
 }
 
 - (void)flash:(NSString *)msg red:(BOOL)red {
