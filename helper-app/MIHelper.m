@@ -67,7 +67,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
         _sideControl = [[UISegmentedControl alloc] initWithItems:@[@"Me", @"Them"]];
         _sideControl.translatesAutoresizingMaskIntoConstraints = NO;
         _sideControl.selectedSegmentIndex = 0;
-        _sideControl.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        [_sideControl setTitleTextAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:11 weight:UIFontWeightMedium]} forState:UIControlStateNormal];
         [_sideControl addTarget:self action:@selector(sideChanged:) forControlEvents:UIControlEventValueChanged];
 
         _textField = [[UITextField alloc] init];
