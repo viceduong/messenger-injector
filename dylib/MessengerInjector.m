@@ -1059,79 +1059,83 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
             MI_progress(@"inject: WAL checkpoint done");
 
-            // Dump client_messages schema + sample (this might be what UI reads from)
+            // Dump client_messages table CREATE statement (truncated)
             [report appendString:@"\n=== client_messages schema ===\n"];
             {
                 sqlite3_stmt *cs = NULL;
                 if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_messages'", -1, &cs, NULL) == SQLITE_OK) {
                     if (sqlite3_step(cs) == SQLITE_ROW) {
-                        [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                        NSString *sqlStr = MI_cstr(sqlite3_column_text(cs, 0));
+                        if (sqlStr.length > 500) sqlStr = [sqlStr substringToIndex:500];
+                        [report appendFormat:@"%@...\n\n", sqlStr];
                     }
                     sqlite3_finalize(cs);
                 }
             }
-            // Dump 3 sample rows from client_messages
-            [report appendString:@"=== client_messages (3 rows) ===\n"];
+            // Dump 1 sample row from client_messages
+            [report appendString:@"=== client_messages (1 row) ===\n"];
             {
                 sqlite3_stmt *cs = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT * FROM client_messages LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_messages LIMIT 1", -1, &cs, NULL) == SQLITE_OK) {
                     int cc = sqlite3_column_count(cs);
                     for (int c = 0; c < cc; c++) {
                         [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
                     }
                     [report appendString:@"\n---\n"];
-                    int rn = 0;
-                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
                         for (int c = 0; c < cc; c++) {
                             [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
                         }
                         [report appendString:@"\n"];
-                        rn++;
                     }
                     sqlite3_finalize(cs);
                 }
             }
 
-            // Dump client_threads schema + sample
+            // Dump client_threads schema + 1 sample row
             [report appendString:@"\n=== client_threads schema ===\n"];
             {
                 sqlite3_stmt *cs = NULL;
                 if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_threads'", -1, &cs, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(cs) == SQLITE_ROW) [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
+                        NSString *sqlStr = MI_cstr(sqlite3_column_text(cs, 0));
+                        if (sqlStr.length > 800) sqlStr = [sqlStr substringToIndex:800];
+                        [report appendFormat:@"%@...\n\n", sqlStr];
+                    }
                     sqlite3_finalize(cs);
                 }
-                if (sqlite3_prepare_v2(db, "SELECT * FROM client_threads LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_threads LIMIT 1", -1, &cs, NULL) == SQLITE_OK) {
                     int cc = sqlite3_column_count(cs);
-                    [report appendString:@"=== client_threads (3 rows) ===\n"];
+                    [report appendString:@"=== client_threads (1 row) ===\n"];
                     for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
                     [report appendString:@"\n---\n"];
-                    int rn = 0;
-                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
                         for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
                         [report appendString:@"\n"];
-                        rn++;
                     }
                     sqlite3_finalize(cs);
                 }
             }
-            // Dump client_contacts schema + sample
+            // Dump client_contacts schema + 1 sample row
             [report appendString:@"\n=== client_contacts schema ===\n"];
             {
                 sqlite3_stmt *cs = NULL;
                 if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_contacts'", -1, &cs, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(cs) == SQLITE_ROW) [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
+                        NSString *sqlStr = MI_cstr(sqlite3_column_text(cs, 0));
+                        if (sqlStr.length > 800) sqlStr = [sqlStr substringToIndex:800];
+                        [report appendFormat:@"%@...\n\n", sqlStr];
+                    }
                     sqlite3_finalize(cs);
                 }
-                if (sqlite3_prepare_v2(db, "SELECT * FROM client_contacts LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_contacts LIMIT 1", -1, &cs, NULL) == SQLITE_OK) {
                     int cc = sqlite3_column_count(cs);
-                    [report appendString:@"=== client_contacts (3 rows) ===\n"];
+                    [report appendString:@"=== client_contacts (1 row) ===\n"];
                     for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
                     [report appendString:@"\n---\n"];
-                    int rn = 0;
-                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
                         for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
                         [report appendString:@"\n"];
-                        rn++;
                     }
                     sqlite3_finalize(cs);
                 }
