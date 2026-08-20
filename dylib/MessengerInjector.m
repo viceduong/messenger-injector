@@ -75,8 +75,12 @@ static NSString *gLastThreadID = nil;
 static NSString *gFoundDBPath  = nil;
 static NSString *gLocalUserID  = nil;
 
-static NSString *const kProgressFile = @"/tmp/mi_progress.txt";
-static NSString *const kCrashFile    = @"/tmp/mi_crash.txt";
+static NSString *MI_progressFile(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_progress.txt"];
+}
+static NSString *MI_crashFile(void) {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_crash.txt"];
+}
 
 // ============================================================
 // Crash + progress diagnostics
@@ -86,10 +90,10 @@ static void MI_log(NSString *fmt, ...);
 static void MI_progress(NSString *step) {
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], step];
     // Append to progress file
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kProgressFile];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:MI_progressFile()];
     if (!fh) {
-        [[@"\n=== Session %@ ===\n" dataUsingEncoding:NSUTF8StringEncoding] writeToFile:kProgressFile atomically:YES];
-        fh = [NSFileHandle fileHandleForWritingAtPath:kProgressFile];
+        [[NSString stringWithFormat:@"\n=== Session %@ ===\n", [NSDate date]] dataUsingEncoding:NSUTF8StringEncoding] writeToFile:MI_progressFile() atomically:YES];
+        fh = [NSFileHandle fileHandleForWritingAtPath:MI_progressFile()];
     }
     if (fh) {
         [fh seekToEndOfFile];
@@ -101,7 +105,7 @@ static void MI_progress(NSString *step) {
 
 static void MI_writeCrash(NSString *info) {
     NSString *msg = [NSString stringWithFormat:@"[%@] CRASH: %@\n", [NSDate date], info];
-    [msg writeToFile:kCrashFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [msg writeToFile:MI_crashFile() atomically:YES encoding:NSUTF8StringEncoding error:nil];
     MI_log(@"CRASH: %@", info);
 }
 
@@ -217,33 +221,65 @@ static NSString *MI_findDatabase(void) {
         NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:root];
         NSString *rel;
         while ((rel = [dirEnum nextObject])) {
-            if (![rel hasSuffix:@".db"]) continue;
+            // Match .db, .sqlite, .sqlite3, or files with light/msys/message in name
+            BOOL isDB = [rel hasSuffix:@".db"] || [rel hasSuffix:@".sqlite"] || [rel hasSuffix:@".sqlite3"];
+            BOOL hasKeyword = MI_contains(rel, @"light") || MI_contains(rel, @"msys") || MI_contains(rel, @"message");
+            if (!isDB && !hasKeyword) continue;
             NSString *full = [root stringByAppendingPathComponent:rel];
             [allDBs addObject:full];
         }
         MI_progress([NSString stringWithFormat:@"findDB: scanned %@ (%d total)", root, (int)allDBs.count]);
     }
 
-    // Also search AppGroup shared containers
+    // Also search AppGroup shared containers (try known FB group IDs + directory listing)
+    NSMutableArray<NSString *> *appGroupPaths = [NSMutableArray array];
+
+    // Try known Facebook AppGroup identifiers
+    NSArray *fbGroupIDs = @[
+        @"group.com.facebook.Messenger",
+        @"group.com.facebook.Messenger.group",
+        @"group.com.facebook.Messenger.shared",
+        @"group.com.facebook.Messenger.files",
+        @"group.com.facebook.Messenger.internal",
+        @"group.com.facebook.Messenger.LightSpeed",
+        @"group.com.facebook.lightspeed",
+        @"group.com.facebook",
+        @"group.com.facebook.Messenger.uploadtasks"
+    ];
+    for (NSString *gid in fbGroupIDs) {
+        NSURL *url = [fm containerURLForSecurityApplicationGroupIdentifier:gid];
+        if (url) {
+            MI_progress([NSString stringWithFormat:@"findDB: AppGroup %@ -> %@", gid, url.path]);
+            [appGroupPaths addObject:url.path];
+        }
+    }
+
+    // Also try directory listing
     @try {
         NSString *sharedBase = @"/var/mobile/Containers/Shared/AppGroup";
         NSArray *groups = [fm contentsOfDirectoryAtPath:sharedBase error:nil];
-        MI_progress([NSString stringWithFormat:@"findDB: %d AppGroups", (int)groups.count]);
+        MI_progress([NSString stringWithFormat:@"findDB: %d AppGroups in shared dir", (int)groups.count]);
         for (NSString *g in groups) {
-            @try {
-                NSString *gp = [sharedBase stringByAppendingPathComponent:g];
-                NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:gp];
-                NSString *rel;
-                while ((rel = [dirEnum nextObject])) {
-                    if (![rel hasSuffix:@".db"]) continue;
-                    [allDBs addObject:[gp stringByAppendingPathComponent:rel]];
-                }
-            } @catch (NSException *e) {
-                MI_progress([NSString stringWithFormat:@"findDB: skip group %@ (%@)", g, e.name]);
-            }
+            NSString *gp = [sharedBase stringByAppendingPathComponent:g];
+            if (![appGroupPaths containsObject:gp]) [appGroupPaths addObject:gp];
         }
     } @catch (NSException *e) {
-        MI_progress([NSString stringWithFormat:@"findDB: AppGroup scan failed: %@", e.name]);
+        MI_progress([NSString stringWithFormat:@"findDB: shared AppGroup dir failed: %@", e.name]);
+    }
+
+    for (NSString *gp in appGroupPaths) {
+        @try {
+            NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:gp];
+            NSString *rel;
+            while ((rel = [dirEnum nextObject])) {
+                BOOL isDB = [rel hasSuffix:@".db"] || [rel hasSuffix:@".sqlite"] || [rel hasSuffix:@".sqlite3"];
+                BOOL hasKeyword = MI_contains(rel, @"light") || MI_contains(rel, @"msys") || MI_contains(rel, @"message");
+                if (!isDB && !hasKeyword) continue;
+                [allDBs addObject:[gp stringByAppendingPathComponent:rel]];
+            }
+        } @catch (NSException *e) {
+            MI_progress([NSString stringWithFormat:@"findDB: skip group %@ (%@)", gp, e.name]);
+        }
     }
 
     MI_progress([NSString stringWithFormat:@"findDB: %d .db files total", (int)allDBs.count]);
@@ -1015,8 +1051,8 @@ static void MI_hSample(void) {
 // ============================================================
 static void MI_hGetCrashLog(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *crash = [NSString stringWithContentsOfFile:kCrashFile encoding:NSUTF8StringEncoding error:nil];
-        NSString *progress = [NSString stringWithContentsOfFile:kProgressFile encoding:NSUTF8StringEncoding error:nil];
+        NSString *crash = [NSString stringWithContentsOfFile:MI_crashFile() encoding:NSUTF8StringEncoding error:nil];
+        NSString *progress = [NSString stringWithContentsOfFile:MI_progressFile() encoding:NSUTF8StringEncoding error:nil];
         NSMutableString *result = [NSMutableString string];
         if (crash.length > 0) {
             [result appendFormat:@"=== CRASH LOG ===\n%@\n\n", crash];
