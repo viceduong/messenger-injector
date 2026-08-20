@@ -1061,11 +1061,40 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 }
             }
 
+            // List all client_threads (pk, thread_key, thread_name) for debugging
+            {
+                sqlite3_stmt *s = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT pk, thread_key, default_thread_name, thread_name FROM client_threads LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
+                    [report appendString:@"\n=== client_threads list ===\n"];
+                    [report appendString:@"pk | thread_key | default_thread_name | thread_name\n"];
+                    int rn = 0;
+                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
+                        [report appendFormat:@"%@ | %@ | %@ | %@\n",
+                            MI_cstr(sqlite3_column_text(s, 0)),
+                            MI_cstr(sqlite3_column_text(s, 1)),
+                            MI_cstr(sqlite3_column_text(s, 2)),
+                            MI_cstr(sqlite3_column_text(s, 3))];
+                        rn++;
+                    }
+                    sqlite3_finalize(s);
+                }
+            }
+            // List distinct thread_keys from messages table (FB IDs)
+            {
+                sqlite3_stmt *s = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_key FROM messages LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
+                    [report appendString:@"\n=== distinct thread_keys from messages ===\n"];
+                    int rn = 0;
+                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
+                        [report appendFormat:@"%@\n", MI_cstr(sqlite3_column_text(s, 0))];
+                        rn++;
+                    }
+                    sqlite3_finalize(s);
+                }
+            }
             // Force WAL checkpoint so changes are written to main DB file
             sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
             MI_progress(@"inject: WAL checkpoint done");
-
-            // Update client_threads to bump last activity + snippet
             if (threadPk > 0) {
                 NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
                 long long lastTs = nowMs;
