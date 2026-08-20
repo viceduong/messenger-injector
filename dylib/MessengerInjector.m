@@ -516,34 +516,52 @@ static void MI_postResult(NSString *tag, NSString *text) {
 }
 
 static void MI_hFindDB(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *path = MI_findDatabase();
-        if (path) {
-            NSFileManager *fm = [NSFileManager defaultManager];
-            NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
-            unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
-            MI_postResult(@"findDB", [NSString stringWithFormat:@"SELECTED: %@\nSize: %.1f MB\n\n(see Console for full .db list)", path, sz / 1048576.0]);
-        } else {
-            MI_postResult(@"findDB", @"No .db files found in app sandbox or AppGroup containers.\nCheck Console for search details.");
-        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (path) {
+                NSFileManager *fm = [NSFileManager defaultManager];
+                NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+                unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+                MI_postResult(@"findDB", [NSString stringWithFormat:@"SELECTED: %@\nSize: %.1f MB", path, sz / 1048576.0]);
+            } else {
+                MI_postResult(@"findDB", @"No .db files found.");
+            }
+        });
     });
 }
 static void MI_hSchema(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *dbPath = MI_findDatabase();
+        if (!dbPath.length) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                MI_postResult(@"schema", @"No database found.");
+            });
+            return;
+        }
         MI_dumpSchema(dbPath);
         NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_schema.txt"];
         NSString *content = [NSString stringWithContentsOfFile:out encoding:NSUTF8StringEncoding error:nil];
-        MI_postResult(@"schema", content.length > 0 ? content : @"Schema file empty or missing.");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MI_postResult(@"schema", content.length > 0 ? content : @"Schema file empty.");
+        });
     });
 }
 static void MI_hSample(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString *dbPath = MI_findDatabase();
+        if (!dbPath.length) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                MI_postResult(@"sample", @"No database found.");
+            });
+            return;
+        }
         MI_dumpSample(dbPath);
         NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_sample.txt"];
         NSString *content = [NSString stringWithContentsOfFile:out encoding:NSUTF8StringEncoding error:nil];
-        MI_postResult(@"sample", content.length > 0 ? content : @"Sample file empty or missing.");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MI_postResult(@"sample", content.length > 0 ? content : @"Sample file empty.");
+        });
     });
 }
 
