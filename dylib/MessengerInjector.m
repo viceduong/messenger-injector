@@ -39,6 +39,7 @@
 #import <fcntl.h>
 #import <unistd.h>
 #import <string.h>
+#import <ctype.h>
 #import <sqlite3.h>
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -330,18 +331,62 @@ static NSString *MI_findDatabase(void) {
         MI_progress([NSString stringWithFormat:@"  DB: %@ (%.1f KB)", db, sz / 1024.0]);
     }
 
-    // PRIORITY 1: Find DB with a 'messages' table (definitive)
+    // PRIORITY 1: DB named lightspeed-<digits>.db at root of AppGroup (real messages DB)
     NSString *best = nil;
-    MI_progress(@"findDB: checking for messages table...");
     for (NSString *db in allDBs) {
-        if (MI_hasMessagesTable(db)) {
-            best = db;
-            MI_progress([NSString stringWithFormat:@"findDB: FOUND messages table in %@", db]);
-            break;
+        NSString *fname = [db lastPathComponent];
+        // Match lightspeed-<digits>.db exactly (not lightspeed-imageCache, lightspeed-TAMStorage, etc.)
+        if ([fname hasPrefix:@"lightspeed-"] && [fname hasSuffix:@".db"]) {
+            // Extract middle part and check if it's all digits
+            NSString *mid = [fname substringWithRange:NSMakeRange(11, fname.length - 14)]; // skip "lightspeed-" and ".db"
+            BOOL allDigits = mid.length > 0;
+            for (NSUInteger i = 0; i < mid.length; i++) {
+                if (!isdigit([mid characterAtIndex:i])) { allDigits = NO; break; }
+            }
+            if (allDigits) {
+                best = db;
+                MI_progress([NSString stringWithFormat:@"findDB: matched lightspeed-<digits>.db pattern: %@", db]);
+                break;
+            }
         }
     }
 
-    // PRIORITY 2: lightspeed-*.db > msys*.db > MDCore*.db > messaging*.db > largest .db
+    // PRIORITY 2: DB with both 'messages' AND 'contacts' tables (msys schema)
+    if (!best) {
+        MI_progress(@"findDB: checking for messages+contacts tables...");
+        for (NSString *db in allDBs) {
+            if (MI_hasMessagesTable(db)) {
+                // Also check for contacts table
+                sqlite3 *cdb = NULL;
+                if (sqlite3_open_v2(db.UTF8String, &cdb, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+                    sqlite3_stmt *cs = NULL;
+                    if (sqlite3_prepare_v2(cdb, "SELECT name FROM sqlite_master WHERE type='table' AND name='contacts' LIMIT 1", -1, &cs, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(cs) == SQLITE_ROW) {
+                            best = db;
+                            MI_progress([NSString stringWithFormat:@"findDB: FOUND messages+contacts in %@", db]);
+                        }
+                        sqlite3_finalize(cs);
+                    }
+                    sqlite3_close(cdb);
+                }
+                if (best) break;
+            }
+        }
+    }
+
+    // PRIORITY 3: DB with 'messages' table only
+    if (!best) {
+        MI_progress(@"findDB: checking for messages table only...");
+        for (NSString *db in allDBs) {
+            if (MI_hasMessagesTable(db)) {
+                best = db;
+                MI_progress([NSString stringWithFormat:@"findDB: FOUND messages table in %@", db]);
+                break;
+            }
+        }
+    }
+
+    // PRIORITY 4: lightspeed > msys > MDCore > messaging > largest
     if (!best) for (NSString *db in allDBs) {
         if ([db containsString:@"lightspeed"]) { best = db; break; }
     }
