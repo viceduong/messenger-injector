@@ -680,12 +680,12 @@ static void MI_hThreads(void) {
                     // Truncate last text for display
                     if (lastText.length > 40) lastText = [lastText substringToIndex:40];
                     
-                    [threads addObject:@{
-                        @"k": threadKey,
-                        @"n": name ?: @"",
-                        @"p": lastText ?: @"",
-                        @"t": @(lastTs)
-                    }];
+                    NSMutableDictionary *t = [NSMutableDictionary dictionary];
+                    t[@"k"] = threadKey;
+                    t[@"n"] = name ?: @"";
+                    t[@"p"] = lastText.length > 0 ? lastText : @"";
+                    t[@"t"] = @(lastTs);
+                    [threads addObject:t];
                 }
                 sqlite3_finalize(s);
             }
@@ -708,8 +708,7 @@ static void MI_hThreads(void) {
                             if (n.length > 0 && ![n isEqualToString:@"NULL"]) t[@"n"] = n;
                         }
                         sqlite3_finalize(cs);
-                    }
-                }
+                    }                }
             }
 
             sqlite3_close(db);
