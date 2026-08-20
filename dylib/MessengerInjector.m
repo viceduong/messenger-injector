@@ -36,6 +36,9 @@
 #import <objc/message.h>
 #import <signal.h>
 #import <execinfo.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <string.h>
 #import <sqlite3.h>
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -81,6 +84,8 @@ static NSString *MI_progressFile(void) {
 static NSString *MI_crashFile(void) {
     return [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_crash.txt"];
 }
+// Static C buffer for signal handler (async-signal-safe, no ObjC)
+static char g_crashFilePath[1024] = {0};
 
 // ============================================================
 // Crash + progress diagnostics
@@ -117,15 +122,20 @@ static void MI_crashHandler(NSException *exc) {
 }
 
 static void MI_signalHandler(int sig) {
+    // Async-signal-safe: only use write() and backtrace (no ObjC messaging)
     void *callstack[32];
     int frames = backtrace(callstack, 32);
-    char **symbols = backtrace_symbols(callstack, frames);
-    NSMutableString *bt = [NSMutableString string];
-    for (int i = 0; i < frames; i++) {
-        [bt appendFormat:@"%s\n", symbols ? symbols[i] : "?"];
+    // Write to crash file if path was set by constructor
+    if (g_crashFilePath[0] != 0) {
+        int fd = open(g_crashFilePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            char buf[256];
+            int len = snprintf(buf, sizeof(buf), "Signal %d\nBacktrace:\n", sig);
+            write(fd, buf, len);
+            backtrace_symbols_fd(callstack, frames, fd);
+            close(fd);
+        }
     }
-    free(symbols);
-    MI_writeCrash([NSString stringWithFormat:@"Signal %d\nBacktrace:\n%@", sig, bt]);
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -1228,6 +1238,10 @@ static void MI_hGetCrashLog(void) {
 // ============================================================
 __attribute__((constructor))
 static void MI_ctor(void) {
+    // Set crash file path for signal handler (async-signal-safe C string)
+    NSString *crashPath = MI_crashFile();
+    strncpy(g_crashFilePath, crashPath.UTF8String ?: "", sizeof(g_crashFilePath) - 1);
+
     // Install crash handlers immediately
     NSSetUncaughtExceptionHandler(MI_crashHandler);
     signal(SIGABRT, MI_signalHandler);
