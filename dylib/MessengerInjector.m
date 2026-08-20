@@ -964,7 +964,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             }
             MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld (%@)", threadPk, pkMethod]);
             [report appendFormat:@"thread_pk: %lld (method: %@)%@\n", threadPk, pkMethod,
-                [pkMethod isEqualToString:@"LAST_RESORT_first_thread"] ? @"  ⚠️ WRONG CHAT RISK" : @""]];
+                [pkMethod isEqualToString:@"LAST_RESORT_first_thread"] ? @"  ⚠️ WRONG CHAT RISK" : @""];
 
             // Log resolved thread name for verification
             {
