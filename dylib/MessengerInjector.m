@@ -200,6 +200,12 @@ static NSString *MI_esc(NSString *s) {
     return [s stringByReplacingOccurrencesOfString:@"'" withString:@"''"];
 }
 
+// Dummy SQLite function: returns 0 (Messenger registers custom functions on its connection;
+// our external connection doesn't have them, so triggers fail on INSERT)
+static void MI_dummy_zero(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    sqlite3_result_int(ctx, 0);
+}
+
 // ============================================================
 // Forward declarations
 // ============================================================
@@ -414,16 +420,32 @@ static NSString *MI_findDatabase(void) {
         unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
         MI_progress([NSString stringWithFormat:@"findDB: selected %@ (%.1f MB)", best, sz / 1048576.0]);
 
-        // Parse local user ID from filename: lightspeed-<userid>.db
+        // Parse local user ID from filename:
+        //   - lightspeed-<userid>.db (old pattern)
+        //   - <userid>.db in lightspeed-userDatabases/ dir (current pattern)
         NSString *fname = [best lastPathComponent];
-        NSRange dashRange = [fname rangeOfString:@"-"];
-        if (dashRange.location != NSNotFound) {
-            NSRange dotRange = [fname rangeOfString:@"."];
-            NSUInteger end = (dotRange.location != NSNotFound) ? dotRange.location : fname.length;
-            NSString *uid = [fname substringWithRange:NSMakeRange(dashRange.location + 1, end - dashRange.location - 1)];
-            if (uid.length > 0 && uid.longLongValue > 0) {
-                gLocalUserID = uid;
-                MI_progress([NSString stringWithFormat:@"findDB: localUserID=%@", uid]);
+        NSString *withoutExt = [fname stringByDeletingPathExtension];
+        
+        // Check if filename is all digits (userDatabases/<userid>.db pattern)
+        BOOL allDigits = withoutExt.length > 0;
+        for (NSUInteger i = 0; i < withoutExt.length; i++) {
+            if (!isdigit([withoutExt characterAtIndex:i])) { allDigits = NO; break; }
+        }
+        
+        if (allDigits) {
+            gLocalUserID = withoutExt;
+            MI_progress([NSString stringWithFormat:@"findDB: localUserID=%@ (from filename)", withoutExt]);
+        } else {
+            // Try lightspeed-<userid>.db pattern
+            NSRange dashRange = [fname rangeOfString:@"-"];
+            if (dashRange.location != NSNotFound) {
+                NSRange dotRange = [fname rangeOfString:@"."];
+                NSUInteger end = (dotRange.location != NSNotFound) ? dotRange.location : fname.length;
+                NSString *uid = [fname substringWithRange:NSMakeRange(dashRange.location + 1, end - dashRange.location - 1)];
+                if (uid.length > 0 && uid.longLongValue > 0) {
+                    gLocalUserID = uid;
+                    MI_progress([NSString stringWithFormat:@"findDB: localUserID=%@ (from lightspeed- prefix)", uid]);
+                }
             }
         }
     } else {
@@ -744,7 +766,11 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 return;
             }
             sqlite3_busy_timeout(db, 5000);
-            MI_progress(@"inject: DB opened RW");
+            // Register dummy functions that Messenger registers on its connection
+            // (triggers reference them; without registration, INSERT fails)
+            sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            MI_progress(@"inject: DB opened RW, dummy functions registered");
 
             NSMutableString *report = [NSMutableString string];
 
@@ -801,19 +827,29 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             // Step 3: Determine local user ID and other party ID
             NSString *localUid = gLocalUserID;
             if (!localUid.length) {
-                // Parse from DB filename
+                // Parse from DB filename: <userid>.db or lightspeed-<userid>.db
                 NSString *fname = [dbPath lastPathComponent];
-                NSRange dash = [fname rangeOfString:@"-"];
-                if (dash.location != NSNotFound) {
-                    NSRange dot = [fname rangeOfString:@"."];
-                    NSUInteger end = (dot.location != NSNotFound) ? dot.location : fname.length;
+                NSString *withoutExt = [fname stringByDeletingPathExtension];
+                // Check if all digits
+                BOOL allDigits = withoutExt.length > 0;
+                for (NSUInteger i = 0; i < withoutExt.length; i++) {
+                    if (!isdigit([withoutExt characterAtIndex:i])) { allDigits = NO; break; }
+                }
+                if (allDigits) {
+                    localUid = withoutExt;
+                    gLocalUserID = withoutExt;
+                } else {
+                    NSRange dash = [fname rangeOfString:@"-"];
+                    if (dash.location != NSNotFound) {
+                        NSRange dot = [fname rangeOfString:@"."];
+                        NSUInteger end = (dot.location != NSNotFound) ? dot.location : fname.length;
                     NSString *uid = [fname substringWithRange:NSMakeRange(dash.location + 1, end - dash.location - 1)];
                     if (uid.length > 0 && uid.longLongValue > 0) {
                         localUid = uid;
                         gLocalUserID = uid;
                     }
                 }
-            }
+                } // end else
             // If still no local UID, try to find it: the sender_id that appears most in outgoing messages
             if (!localUid.length && senderIds.count > 0) {
                 localUid = senderIds.firstObject;

@@ -187,6 +187,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     UILabel *compSec = [self sec:@"Conversation Composer"];
 
     self.threadField = [self makeField:@"Thread ID (e.g. user_id)" UIKeyboardType:UIKeyboardTypeDefault];
+    self.threadField.text = @"1455922134493907"; // auto-populate test thread for convenience
 
     UIView *groupRow = [[UIView alloc] init];
     groupRow.translatesAutoresizingMaskIntoConstraints = NO;
