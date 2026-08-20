@@ -81,6 +81,8 @@ static NSString *const kCrashFile    = @"/tmp/mi_crash.txt";
 // ============================================================
 // Crash + progress diagnostics
 // ============================================================
+static void MI_log(NSString *fmt, ...);
+
 static void MI_progress(NSString *step) {
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], step];
     // Append to progress file
@@ -333,7 +335,7 @@ static void MI_dumpSchema(NSString *dbPath) {
         NSString *type = MI_cstr(sqlite3_column_text(st, 0));
         NSString *name = MI_cstr(sqlite3_column_text(st, 1));
         NSString *sql  = MI_cstr(sqlite3_column_text(st, 2));
-        MI_write(fh, [NSString stringWithFormat:@"--- %@: %@ ---\n%s\n\n", type, name, sql]);
+        MI_write(fh, [NSString stringWithFormat:@"--- %@: %@ ---\n%@\n\n", type, name, sql]);
         if ([type isEqualToString:@"table"]) tc++;
         else if ([type isEqualToString:@"index"]) ic++;
         else if ([type isEqualToString:@"trigger"]) trg++;
@@ -728,7 +730,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 }
             }
             [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
-            MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]];
+            MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
 
             // Step 6: INSERT messages
             MI_progress(@"inject: starting transaction");
