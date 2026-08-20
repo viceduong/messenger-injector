@@ -871,9 +871,23 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             MI_progress(@"inject: starting transaction");
             sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
 
+            // Find max offline_threading_id for generating new ones
+            MI_progress(@"inject: finding max offline_threading_id");
+            long long maxOtid = 0;
+            {
+                sqlite3_stmt *s = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT MAX(CAST(offline_threading_id AS INTEGER)) FROM messages", -1, &s, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s) == SQLITE_ROW) {
+                        maxOtid = sqlite3_column_int64(s, 0);
+                    }
+                    sqlite3_finalize(s);
+                }
+            }
+            MI_progress([NSString stringWithFormat:@"inject: maxOtid=%lld", maxOtid]);
+
             int inserted = 0;
             int errors = 0;
-            long long nextMsgId = maxMsgId + 1;
+            long long nextOtid = maxOtid + 1;
             long long nowMs = (long long)([NSDate date].timeIntervalSince1970 * 1000);
 
             for (int i = 0; i < (int)messages.count; i++) {
@@ -885,14 +899,26 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 long long ts = nowMs - (minutesAgo * 60 * 1000);
                 NSString *senderId = [side isEqualToString:@"me"] ? localUid : otherUid;
 
-                // Build message_id: use nextMsgId (server-format, non-zero = already synced)
-                NSString *msgIdStr = [NSString stringWithFormat:@"%lld", nextMsgId];
+                // Generate message_id in Messenger format: mid.$<random_base64_like>
+                NSString *msgIdStr = [NSString stringWithFormat:@"mid.$cAAV21KjfFFKd8%@%lld",
+                                       [[NSUUID UUID] UUIDString], ts];
+                // Generate offline_threading_id (large integer)
+                long long otid = nextOtid;
 
-                // INSERT OR IGNORE
+                // INSERT OR IGNORE with real schema columns
+                // Required: thread_key, timestamp_ms, message_id, offline_threading_id, text, sender_id,
+                //           is_admin_message, authority_level, send_status, send_status_v2, is_unsent,
+                //           primary_sort_key, message_rendering_type
                 NSString *sql = [NSString stringWithFormat:
-                    @"INSERT OR IGNORE INTO messages (message_id, timestamp_ms, sender_id, thread_key, text, is_admin_message) "
-                    @"VALUES ('%@', %lld, '%@', '%@', '%@', 0)",
-                    MI_esc(msgIdStr), ts, MI_esc(senderId), MI_esc(threadKey), MI_esc(text)];
+                    @"INSERT OR IGNORE INTO messages ("
+                    @"thread_key, timestamp_ms, message_id, offline_threading_id, text, sender_id, "
+                    @"is_admin_message, authority_level, send_status, send_status_v2, is_unsent, "
+                    @"primary_sort_key, message_rendering_type, has_quick_replies, is_forwarded, "
+                    @"text_has_links, view_flags) "
+                    @"VALUES ('%@', %lld, '%@', %lld, '%@', '%@', "
+                    @"0, 80, 2, 2, 0, %lld, 2, 0, 0, 0, 0)",
+                    MI_esc(threadKey), ts, MI_esc(msgIdStr), otid, MI_esc(text), MI_esc(senderId),
+                    ts];
 
                 char *errMsg = NULL;
                 int rc = sqlite3_exec(db, sql.UTF8String, NULL, NULL, &errMsg);
@@ -904,7 +930,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     [report appendFormat:@"  [%d] ERROR: %s\n  SQL: %@\n", i+1, errMsg ? errMsg : "?", sql];
                     if (errMsg) sqlite3_free(errMsg);
                 }
-                nextMsgId++;
+                nextOtid++;
             }
 
             sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
