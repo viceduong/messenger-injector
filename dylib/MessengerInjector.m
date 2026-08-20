@@ -843,13 +843,14 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     if (dash.location != NSNotFound) {
                         NSRange dot = [fname rangeOfString:@"."];
                         NSUInteger end = (dot.location != NSNotFound) ? dot.location : fname.length;
-                    NSString *uid = [fname substringWithRange:NSMakeRange(dash.location + 1, end - dash.location - 1)];
-                    if (uid.length > 0 && uid.longLongValue > 0) {
-                        localUid = uid;
-                        gLocalUserID = uid;
+                        NSString *uid = [fname substringWithRange:NSMakeRange(dash.location + 1, end - dash.location - 1)];
+                        if (uid.length > 0 && uid.longLongValue > 0) {
+                            localUid = uid;
+                            gLocalUserID = uid;
+                        }
                     }
-                }
                 } // end else
+            } // end if (!localUid.length)
             // If still no local UID, try to find it: the sender_id that appears most in outgoing messages
             if (!localUid.length && senderIds.count > 0) {
                 localUid = senderIds.firstObject;
