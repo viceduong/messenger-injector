@@ -166,6 +166,24 @@ static BOOL MI_isSQLiteFile(NSString *path) {
     return strncmp(bytes, "SQLite format 3", 15) == 0;
 }
 
+static BOOL MI_hasMessagesTable(NSString *path) {
+    // Check if DB has a 'messages' table
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(path.UTF8String, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return NO;
+    }
+    sqlite3_busy_timeout(db, 2000);
+    sqlite3_stmt *st = NULL;
+    BOOL found = NO;
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='messages' LIMIT 1", -1, &st, NULL) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW) found = YES;
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return found;
+}
+
 static NSString *MI_esc(NSString *s) {
     if (!s) return @"";
     return [s stringByReplacingOccurrencesOfString:@"'" withString:@"''"];
@@ -295,20 +313,33 @@ static NSString *MI_findDatabase(void) {
         }
     }
 
-    MI_progress([NSString stringWithFormat:@"findDB: %d .db files total", (int)allDBs.count]);
+    MI_progress([NSString stringWithFormat:@"findDB: %d SQLite .db files total", (int)allDBs.count]);
     for (NSString *db in allDBs) {
         NSDictionary *attrs = [fm attributesOfItemAtPath:db error:nil];
         unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
         MI_progress([NSString stringWithFormat:@"  DB: %@ (%.1f KB)", db, sz / 1024.0]);
     }
 
-    // Priority: lightspeed-*.db > msys*.db > messaging*.db > largest .db
+    // PRIORITY 1: Find DB with a 'messages' table (definitive)
     NSString *best = nil;
+    MI_progress(@"findDB: checking for messages table...");
     for (NSString *db in allDBs) {
+        if (MI_hasMessagesTable(db)) {
+            best = db;
+            MI_progress([NSString stringWithFormat:@"findDB: FOUND messages table in %@", db]);
+            break;
+        }
+    }
+
+    // PRIORITY 2: lightspeed-*.db > msys*.db > MDCore*.db > messaging*.db > largest .db
+    if (!best) for (NSString *db in allDBs) {
         if ([db containsString:@"lightspeed"]) { best = db; break; }
     }
     if (!best) for (NSString *db in allDBs) {
         if ([db containsString:@"msys"]) { best = db; break; }
+    }
+    if (!best) for (NSString *db in allDBs) {
+        if ([db containsString:@"MDCore"] || [db containsString:@"mdcore"]) { best = db; break; }
     }
     if (!best) for (NSString *db in allDBs) {
         if ([db containsString:@"messaging"] || [db containsString:@"message"]) { best = db; break; }
@@ -1088,7 +1119,9 @@ static void MI_hListFiles(void) {
                 NSDirectoryEnumerator *en = [fm enumeratorAtPath:dir];
                 NSString *rel;
                 int count = 0;
-                while ((rel = [en nextObject]) && count < 200) {
+                while ((rel = [en nextObject]) && count < 400) {
+                    // Skip cask (RTC models) and rtc_models — too many irrelevant files
+                    if ([rel containsString:@"cask/"] || [rel containsString:@"rtc_models"]) continue;
                     NSString *full = [dir stringByAppendingPathComponent:rel];
                     NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
                     NSString *type = attrs[NSFileType];
@@ -1100,7 +1133,7 @@ static void MI_hListFiles(void) {
                     }
                     count++;
                 }
-                if (count >= 200) [result appendString:@"... (truncated at 200 entries)\n"];
+                if (count >= 400) [result appendString:@"... (truncated at 400 entries)\n"];
             }
 
             // AppGroup directories
@@ -1129,7 +1162,9 @@ static void MI_hListFiles(void) {
                 NSDirectoryEnumerator *en = [fm enumeratorAtPath:gp];
                 NSString *rel;
                 int count = 0;
-                while ((rel = [en nextObject]) && count < 200) {
+                while ((rel = [en nextObject]) && count < 400) {
+                    // Skip cask (RTC models) and rtc_models — too many irrelevant files
+                    if ([rel containsString:@"cask/"] || [rel containsString:@"rtc_models"]) continue;
                     NSString *full = [gp stringByAppendingPathComponent:rel];
                     NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
                     NSString *type = attrs[NSFileType];
@@ -1141,7 +1176,7 @@ static void MI_hListFiles(void) {
                     }
                     count++;
                 }
-                if (count >= 200) [result appendString:@"... (truncated at 200 entries)\n"];
+                if (count >= 400) [result appendString:@"... (truncated at 400 entries)\n"];
             }
 
             NSString *res = [result copy];
