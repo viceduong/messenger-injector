@@ -899,57 +899,65 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
             MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
 
-            // Step 6: Resolve thread_pk by matching messages.offline_threading_id
-            // with client_messages.resonance_offline_threading_id for this thread_key
-            MI_progress(@"inject: resolving thread_pk via offline_threading_id");
+            // Step 6: Resolve thread_pk for this specific thread
+            MI_progress(@"inject: resolving thread_pk");
             long long threadPk = 0;
+            NSString *pkMethod = @"none";
             {
+                // Method 1: JOIN messages → client_messages via offline_threading_id (CAST to TEXT!)
+                // resonance_offline_threading_id is TEXT, offline_threading_id is INTEGER — must cast
                 sqlite3_stmt *s = NULL;
-                // Find a client_messages row whose resonance_offline_threading_id matches
-                // an offline_threading_id from messages WHERE thread_key = threadId
                 NSString *q = [NSString stringWithFormat:
                     @"SELECT cm.thread_pk FROM client_messages cm "
-                    @"JOIN messages m ON cm.resonance_offline_threading_id = m.offline_threading_id "
+                    @"JOIN messages m ON cm.resonance_offline_threading_id = CAST(m.offline_threading_id AS TEXT) "
                     @"WHERE m.thread_key = '%@' LIMIT 1", MI_esc(threadId)];
                 if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
+                    if (sqlite3_step(s) == SQLITE_ROW) {
+                        threadPk = sqlite3_column_int64(s, 0);
+                        pkMethod = @"join_offline_id";
+                    }
                     sqlite3_finalize(s);
                 }
-            }
-            // Fallback: try matching by thread_key in client_threads (may be -1 but try)
-            if (threadPk == 0) {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_threads WHERE thread_key = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
-                    sqlite3_bind_text(s, 1, threadKey.UTF8String, -1, SQLITE_TRANSIENT);
-                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
-                    sqlite3_finalize(s);
+                // Method 2: client_threads fallback_url contains entity_id=<FB ID> (1-on-1 exact match)
+                if (threadPk == 0) {
+                    NSString *q2 = [NSString stringWithFormat:
+                        @"SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1",
+                        MI_esc(threadId)];
+                    if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(s) == SQLITE_ROW) {
+                            threadPk = sqlite3_column_int64(s, 0);
+                            pkMethod = @"entity_id_url";
+                        }
+                        sqlite3_finalize(s);
+                    }
+                }
+                // Method 3: sender_contact_pk = other user's FB ID (they only send in their own 1-on-1 thread)
+                if (threadPk == 0) {
+                    NSString *q3 = [NSString stringWithFormat:
+                        @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 1",
+                        threadId.longLongValue];
+                    if (sqlite3_prepare_v2(db, q3.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(s) == SQLITE_ROW) {
+                            threadPk = sqlite3_column_int64(s, 0);
+                            pkMethod = @"sender_contact_pk";
+                        }
+                        sqlite3_finalize(s);
+                    }
+                }
+                // Last resort: first thread (WRONG chat — flagged in report)
+                if (threadPk == 0) {
+                    if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_pk FROM client_messages LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(s) == SQLITE_ROW) {
+                            threadPk = sqlite3_column_int64(s, 0);
+                            pkMethod = @"LAST_RESORT_first_thread";
+                        }
+                        sqlite3_finalize(s);
+                    }
                 }
             }
-            // Fallback: find thread_pk from client_messages where sender_contact_pk matches threadId
-            // (the threadId is the other person's FB ID, they sent messages in that thread)
-            if (threadPk == 0) {
-                sqlite3_stmt *s = NULL;
-                NSString *q = [NSString stringWithFormat:
-                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 1",
-                    threadId.longLongValue];
-                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
-                    sqlite3_finalize(s);
-                }
-            }
-            // Last resort: first thread_pk from client_messages where local user sent
-            if (threadPk == 0) {
-                sqlite3_stmt *s = NULL;
-                NSString *q = [NSString stringWithFormat:
-                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk IN ('%@', '%@') LIMIT 1",
-                    MI_esc(localUid), MI_esc(otherUid)];
-                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
-                    sqlite3_finalize(s);
-                }
-            }
-            MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld", threadPk]);
-            [report appendFormat:@"thread_pk: %lld\n", threadPk];
+            MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld (%@)", threadPk, pkMethod]);
+            [report appendFormat:@"thread_pk: %lld (method: %@)%@\n", threadPk, pkMethod,
+                [pkMethod isEqualToString:@"LAST_RESORT_first_thread"] ? @"  ⚠️ WRONG CHAT RISK" : @""];
 
             // sender_contact_pk = FB user ID directly
             long long localContactPk = localUid.longLongValue;
