@@ -199,6 +199,7 @@ static void MI_dumpSchema(NSString *dbPath) {
         if (db) sqlite3_close(db);
         return;
     }
+    sqlite3_busy_timeout(db, 10000); // wait up to 10s for locks
 
     NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_schema.txt"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -231,36 +232,28 @@ static void MI_dumpSchema(NSString *dbPath) {
 
     MI_write(fh, [NSString stringWithFormat:@"\n=== Summary: %d tables, %d indexes, %d triggers, %d views ===\n\n", tc, ic, trg, vc]);
 
-    // Column details
-    MI_write(fh, @"=== Column Details ===\n\n");
+    // Table row counts (quick, no PRAGMA needed)
+    MI_write(fh, @"=== Table Row Counts ===\n\n");
     st = NULL;
-    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", -1, &st, NULL) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             NSString *tn = MI_cstr(sqlite3_column_text(st, 0));
             sqlite3_finalize(st);
             st = NULL;
 
-            NSString *pq = [NSString stringWithFormat:@"PRAGMA table_info('%@')",
+            NSString *cq = [NSString stringWithFormat:@"SELECT count(*) FROM '%@'",
                            [tn stringByReplacingOccurrencesOfString:@"'" withString:@"''"]];
             sqlite3_stmt *cs = NULL;
-            if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &cs, NULL) != SQLITE_OK) {
-                sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL);
-                continue;
+            if (sqlite3_prepare_v2(db, cq.UTF8String, -1, &cs, NULL) == SQLITE_OK) {
+                if (sqlite3_step(cs) == SQLITE_ROW) {
+                    long long cnt = sqlite3_column_int64(cs, 0);
+                    MI_write(fh, [NSString stringWithFormat:@"%-40s %lld rows\n", tn.UTF8String, cnt]);
+                }
+                sqlite3_finalize(cs);
+            } else {
+                MI_write(fh, [NSString stringWithFormat:@"%-40s (error)\n", tn.UTF8String]);
             }
-            MI_write(fh, [NSString stringWithFormat:@"\nTable: %@\n", tn]);
-            MI_write(fh, @"  cid | name                     | type         | nn | dflt      | pk\n");
-            while (sqlite3_step(cs) == SQLITE_ROW) {
-                int cid = sqlite3_column_int(cs, 0);
-                NSString *cn = MI_cstr(sqlite3_column_text(cs, 1));
-                NSString *ct = MI_cstr(sqlite3_column_text(cs, 2));
-                int nn = sqlite3_column_int(cs, 3);
-                NSString *df = MI_cstr(sqlite3_column_text(cs, 4));
-                int pk = sqlite3_column_int(cs, 5);
-                MI_write(fh, [NSString stringWithFormat:@"  %3d | %-24s | %-12s | %d  | %-8s | %d\n", cid, cn.UTF8String, ct.UTF8String, nn, df.UTF8String, pk]);
-            }
-            sqlite3_finalize(cs);
-
-            if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &st, NULL) != SQLITE_OK) break;
+            if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", -1, &st, NULL) != SQLITE_OK) break;
         }
         if (st) sqlite3_finalize(st);
     }
@@ -282,6 +275,7 @@ static void MI_dumpSample(NSString *dbPath) {
         if (db) sqlite3_close(db);
         return;
     }
+    sqlite3_busy_timeout(db, 10000);
 
     NSString *out = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_sample.txt"];
     NSFileManager *fm = [NSFileManager defaultManager];
