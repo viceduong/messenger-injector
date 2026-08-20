@@ -904,40 +904,54 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             long long threadPk = 0;
             NSString *pkMethod = @"none";
             {
+                // Method 1: generic scan — find the client_threads row that contains
+                // the FB ID string in ANY text column (URLs, theme_fbid, metadata...).
+                // NOTE: entity_id-only match failed for some threads; sender_contact_pk
+                // lookup is polluted by our own earlier test injections.
                 sqlite3_stmt *s = NULL;
-                // Method 1: entity_id=<FB ID> in client_threads picture URL columns (exact 1-on-1 mapping)
-                // Trailing & prevents prefix-ID collisions (e.g. entity_id=1234& vs entity_id=12345&)
-                NSString *eid = [NSString stringWithFormat:@"entity_id=%@&", threadId];
-                NSString *q = [NSString stringWithFormat:
-                    @"SELECT pk FROM client_threads WHERE "
-                    @"default_other_participant_profile_picture_fallback_url_list LIKE '%%%@%%' "
-                    @"OR default_other_participant_profile_picture_url_list LIKE '%%%@%%' "
-                    @"OR read_profile_picture_fallback_url_list_csv LIKE '%%%@%%' "
-                    @"OR read_profile_picture_url_list_csv LIKE '%%%@%%' "
-                    @"OR default_other_participant_profile_picture_url_expiration_timestamp_ms_list LIKE '%%%@%%' "
-                    @"LIMIT 1", eid, eid, eid, eid, eid];
-                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                    if (sqlite3_step(s) == SQLITE_ROW) {
-                        threadPk = sqlite3_column_int64(s, 0);
-                        pkMethod = @"entity_id_url";
+                NSMutableArray *cols = [NSMutableArray array];
+                sqlite3_stmt *ps = NULL;
+                if (sqlite3_prepare_v2(db, "PRAGMA table_info(client_threads)", -1, &ps, NULL) == SQLITE_OK) {
+                    while (sqlite3_step(ps) == SQLITE_ROW) {
+                        NSString *c = MI_cstr(sqlite3_column_text(ps, 1));
+                        if (c.length > 0) [cols addObject:c];
                     }
-                    sqlite3_finalize(s);
+                    sqlite3_finalize(ps);
                 }
-                // Method 2: sender_contact_pk = other user's FB ID
-                if (threadPk == 0) {
-                    NSString *q2 = [NSString stringWithFormat:
-                        @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 1",
-                        threadId.longLongValue];
-                    if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                if (cols.count > 0) {
+                    NSMutableArray *conds = [NSMutableArray array];
+                    for (NSString *c in cols) {
+                        [conds addObject:[NSString stringWithFormat:@"\"%@\" LIKE '%%%@%%'", c, threadId]];
+                    }
+                    NSString *q = [NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE %@ LIMIT 1",
+                                   [conds componentsJoinedByString:@" OR "]];
+                    if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
                         if (sqlite3_step(s) == SQLITE_ROW) {
                             threadPk = sqlite3_column_int64(s, 0);
-                            pkMethod = @"sender_contact_pk";
+                            pkMethod = @"row_scan";
                         }
                         sqlite3_finalize(s);
+                    } else {
+                        [report appendFormat:@"row_scan SQL error: %s\n", sqlite3_errmsg(db)];
                     }
+                    s = NULL;
+                }
+                // Diagnose which column(s) contain the FB ID (for mapping discovery)
+                if (threadPk > 0) {
+                    NSMutableArray *matchedCols = [NSMutableArray array];
+                    for (NSString *c in cols) {
+                        NSString *qc = [NSString stringWithFormat:@"SELECT COUNT(*) FROM client_threads WHERE \"%@\" LIKE '%%%@%%' AND pk = %lld", c, threadId, threadPk];
+                        sqlite3_stmt *sc = NULL;
+                        if (sqlite3_prepare_v2(db, qc.UTF8String, -1, &sc, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(sc) == SQLITE_ROW && sqlite3_column_int64(sc, 0) > 0) {
+                                [matchedCols addObject:c];
+                            }
+                            sqlite3_finalize(sc);
+                        }
+                    }
+                    [report appendFormat:@"matched columns: %@\n", [matchedCols componentsJoinedByString:@", "]];
                 }
                 // Last resort: first thread (WRONG chat — flagged in report)
-                // NOTE: offline_threading_id JOIN removed — values collide across threads
                 if (threadPk == 0) {
                     if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_pk FROM client_messages LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
                         if (sqlite3_step(s) == SQLITE_ROW) {
@@ -950,7 +964,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             }
             MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld (%@)", threadPk, pkMethod]);
             [report appendFormat:@"thread_pk: %lld (method: %@)%@\n", threadPk, pkMethod,
-                [pkMethod isEqualToString:@"LAST_RESORT_first_thread"] ? @"  ⚠️ WRONG CHAT RISK" : @""];
+                [pkMethod isEqualToString:@"LAST_RESORT_first_thread"] ? @"  ⚠️ WRONG CHAT RISK" : @""]];
 
             // Log resolved thread name for verification
             {
@@ -962,6 +976,19 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     }
                     sqlite3_finalize(s);
                 }
+            }
+
+            // Cleanup: remove our own previously-injected rows from earlier failed tests.
+            // Safe for messages table: our generated message_ids contain UUID dashes
+            // (e.g. mid.$cAAV21KjfFFKd8...-43AA-AB63-...), real server IDs never do
+            // (e.g. mid.$cAAV21KjfFFKd8OiYGWXv6NhbaNu1).
+            // NOTE: client_messages NOT cleaned — real persistent_ids are also dashed UUIDs,
+            // indistinguishable from ours. Stale test rows stay in first chat.
+            {
+                char *clErr = NULL;
+                sqlite3_exec(db, "DELETE FROM messages WHERE message_id LIKE '%-%-%-%-%'", NULL, NULL, &clErr);
+                if (clErr) { [report appendFormat:@"messages cleanup error: %s\n", clErr]; sqlite3_free(clErr); }
+                MI_progress(@"inject: cleanup done");
             }
 
             // sender_contact_pk = FB user ID directly
