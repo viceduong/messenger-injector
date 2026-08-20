@@ -1092,8 +1092,52 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 }
             }
 
-            sqlite3_close(db);
+            // Dump client_threads schema + sample
+            [report appendString:@"\n=== client_threads schema ===\n"];
+            {
+                sqlite3_stmt *cs = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_threads'", -1, &cs, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                    sqlite3_finalize(cs);
+                }
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_threads LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                    int cc = sqlite3_column_count(cs);
+                    [report appendString:@"=== client_threads (3 rows) ===\n"];
+                    for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
+                    [report appendString:@"\n---\n"];
+                    int rn = 0;
+                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                        for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
+                        [report appendString:@"\n"];
+                        rn++;
+                    }
+                    sqlite3_finalize(cs);
+                }
+            }
+            // Dump client_contacts schema + sample
+            [report appendString:@"\n=== client_contacts schema ===\n"];
+            {
+                sqlite3_stmt *cs = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_contacts'", -1, &cs, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                    sqlite3_finalize(cs);
+                }
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_contacts LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                    int cc = sqlite3_column_count(cs);
+                    [report appendString:@"=== client_contacts (3 rows) ===\n"];
+                    for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
+                    [report appendString:@"\n---\n"];
+                    int rn = 0;
+                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                        for (int c = 0; c < cc; c++) [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
+                        [report appendString:@"\n"];
+                        rn++;
+                    }
+                    sqlite3_finalize(cs);
+                }
+            }
 
+            sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
 
