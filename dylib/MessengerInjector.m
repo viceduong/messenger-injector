@@ -155,6 +155,17 @@ static NSString *MI_cstr(const unsigned char *p) {
     return p ? [NSString stringWithUTF8String:(const char *)p] : @"NULL";
 }
 
+static BOOL MI_isSQLiteFile(NSString *path) {
+    // Check SQLite magic header: "SQLite format 3\000"
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!fh) return NO;
+    NSData *header = [fh readDataOfLength:16];
+    [fh closeFile];
+    if (header.length < 15) return NO;
+    const char *bytes = header.bytes;
+    return strncmp(bytes, "SQLite format 3", 15) == 0;
+}
+
 static NSString *MI_esc(NSString *s) {
     if (!s) return @"";
     return [s stringByReplacingOccurrencesOfString:@"'" withString:@"''"];
@@ -221,11 +232,12 @@ static NSString *MI_findDatabase(void) {
         NSDirectoryEnumerator *dirEnum = [fm enumeratorAtPath:root];
         NSString *rel;
         while ((rel = [dirEnum nextObject])) {
-            // Match .db, .sqlite, .sqlite3, or files with light/msys/message in name
+            // Only match actual SQLite database file extensions
             BOOL isDB = [rel hasSuffix:@".db"] || [rel hasSuffix:@".sqlite"] || [rel hasSuffix:@".sqlite3"];
-            BOOL hasKeyword = MI_contains(rel, @"light") || MI_contains(rel, @"msys") || MI_contains(rel, @"message");
-            if (!isDB && !hasKeyword) continue;
+            if (!isDB) continue;
             NSString *full = [root stringByAppendingPathComponent:rel];
+            // Verify it's actually a SQLite file (has magic header)
+            if (!MI_isSQLiteFile(full)) continue;
             [allDBs addObject:full];
         }
         MI_progress([NSString stringWithFormat:@"findDB: scanned %@ (%d total)", root, (int)allDBs.count]);
@@ -273,9 +285,10 @@ static NSString *MI_findDatabase(void) {
             NSString *rel;
             while ((rel = [dirEnum nextObject])) {
                 BOOL isDB = [rel hasSuffix:@".db"] || [rel hasSuffix:@".sqlite"] || [rel hasSuffix:@".sqlite3"];
-                BOOL hasKeyword = MI_contains(rel, @"light") || MI_contains(rel, @"msys") || MI_contains(rel, @"message");
-                if (!isDB && !hasKeyword) continue;
-                [allDBs addObject:[gp stringByAppendingPathComponent:rel]];
+                if (!isDB) continue;
+                NSString *full = [gp stringByAppendingPathComponent:rel];
+                if (!MI_isSQLiteFile(full)) continue;
+                [allDBs addObject:full];
             }
         } @catch (NSException *e) {
             MI_progress([NSString stringWithFormat:@"findDB: skip group %@ (%@)", gp, e.name]);
@@ -1049,6 +1062,101 @@ static void MI_hSample(void) {
 // ============================================================
 // Crash dump handler (returns crash log if exists)
 // ============================================================
+static void MI_hGetCrashLog(void);
+static void MI_hListFiles(void);
+
+// ============================================================
+// List files (dump directory tree of key dirs)
+// ============================================================
+static void MI_hListFiles(void) {
+    MI_progress(@"listFiles: start");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSString *home = NSHomeDirectory();
+            NSMutableString *result = [NSMutableString string];
+            [result appendFormat:@"=== File Listing ===\nHome: %@\n\n", home];
+
+            NSArray *dirs = @[
+                [home stringByAppendingPathComponent:@"Library/Application Support"],
+                [home stringByAppendingPathComponent:@"Library/Application Support/Papaya"],
+                [home stringByAppendingPathComponent:@"Documents"],
+            ];
+            for (NSString *dir in dirs) {
+                [result appendFormat:@"\n--- %@ ---\n", dir];
+                if (![fm fileExistsAtPath:dir]) { [result appendString:@"(not found)\n"]; continue; }
+                NSDirectoryEnumerator *en = [fm enumeratorAtPath:dir];
+                NSString *rel;
+                int count = 0;
+                while ((rel = [en nextObject]) && count < 200) {
+                    NSString *full = [dir stringByAppendingPathComponent:rel];
+                    NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+                    NSString *type = attrs[NSFileType];
+                    unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+                    if ([type isEqualToString:NSFileTypeDirectory]) {
+                        [result appendFormat:@"[DIR]  %@\n", rel];
+                    } else {
+                        [result appendFormat:@"       %@ (%llu B)\n", rel, sz];
+                    }
+                    count++;
+                }
+                if (count >= 200) [result appendString:@"... (truncated at 200 entries)\n"];
+            }
+
+            // AppGroup directories
+            NSMutableArray<NSString *> *appGroupPaths = [NSMutableArray array];
+            NSArray *fbGroupIDs = @[
+                @"group.com.facebook.Messenger", @"group.com.facebook.Messenger.group",
+                @"group.com.facebook.Messenger.shared", @"group.com.facebook.Messenger.files",
+                @"group.com.facebook.Messenger.internal", @"group.com.facebook.Messenger.LightSpeed",
+                @"group.com.facebook.lightspeed", @"group.com.facebook",
+                @"group.com.facebook.Messenger.uploadtasks"
+            ];
+            for (NSString *gid in fbGroupIDs) {
+                NSURL *url = [fm containerURLForSecurityApplicationGroupIdentifier:gid];
+                if (url) [appGroupPaths addObject:url.path];
+            }
+            NSString *sharedBase = @"/var/mobile/Containers/Shared/AppGroup";
+            NSArray *groups = [fm contentsOfDirectoryAtPath:sharedBase error:nil];
+            for (NSString *g in groups) {
+                NSString *gp = [sharedBase stringByAppendingPathComponent:g];
+                if (![appGroupPaths containsObject:gp]) [appGroupPaths addObject:gp];
+            }
+
+            for (NSString *gp in appGroupPaths) {
+                [result appendFormat:@"\n--- AppGroup: %@ ---\n", gp];
+                if (![fm fileExistsAtPath:gp]) { [result appendString:@"(not found)\n"]; continue; }
+                NSDirectoryEnumerator *en = [fm enumeratorAtPath:gp];
+                NSString *rel;
+                int count = 0;
+                while ((rel = [en nextObject]) && count < 200) {
+                    NSString *full = [gp stringByAppendingPathComponent:rel];
+                    NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+                    NSString *type = attrs[NSFileType];
+                    unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
+                    if ([type isEqualToString:NSFileTypeDirectory]) {
+                        [result appendFormat:@"[DIR]  %@\n", rel];
+                    } else {
+                        [result appendFormat:@"       %@ (%llu B)\n", rel, sz];
+                    }
+                    count++;
+                }
+                if (count >= 200) [result appendString:@"... (truncated at 200 entries)\n"];
+            }
+
+            NSString *res = [result copy];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                MI_postResult(@"listFiles", res);
+            });
+        } @catch (NSException *e) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                MI_postResult(@"listFiles", [NSString stringWithFormat:@"Exception: %@ - %@", e.name, e.reason]);
+            });
+        }
+    });
+    MI_progress(@"listFiles: dispatched");
+}
+
 static void MI_hGetCrashLog(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *crash = [NSString stringWithContentsOfFile:MI_crashFile() encoding:NSUTF8StringEncoding error:nil];
@@ -1060,9 +1168,19 @@ static void MI_hGetCrashLog(void) {
             [result appendString:@"No crash log found.\n\n"];
         }
         if (progress.length > 0) {
-            // Last 2000 chars of progress
-            NSString *prog = progress.length > 2000 ? [progress substringFromIndex:progress.length - 2000] : progress;
-            [result appendFormat:@"=== LAST PROGRESS ===\n%@", prog];
+            // Extract only DB: lines and key progress lines (not truncated)
+            NSArray *lines = [progress componentsSeparatedByString:@"\n"];
+            NSMutableString *dbList = [NSMutableString string];
+            NSMutableString *keyLog = [NSMutableString string];
+            for (NSString *line in lines) {
+                if ([line containsString:@"  DB:"]) {
+                    [dbList appendFormat:@"%@\n", line];
+                } else if ([line containsString:@"findDB:"] || [line containsString:@"AppGroup"] || [line containsString:@"ERROR"] || [line containsString:@"selected"] || [line containsString:@"scanned"]) {
+                    [keyLog appendFormat:@"%@\n", line];
+                }
+            }
+            [result appendFormat:@"=== KEY LOG ===\n%@", keyLog];
+            [result appendFormat:@"\n=== DB LIST ===\n%@", dbList.length > 0 ? dbList : @"(no DBs found)"];
         } else {
             [result appendString:@"No progress log found."];
         }
@@ -1126,6 +1244,8 @@ static void MI_ctor(void) {
             }];
         [dnc addObserverForName:@"com.messenger.injector.crashLog" object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hGetCrashLog(); } @catch (NSException *e) {} }];
+        [dnc addObserverForName:@"com.messenger.injector.listFiles" object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hListFiles(); } @catch (NSException *e) {} }];
 
         [dnc postNotificationName:kNotifyReady object:nil
             userInfo:@{@"dylib":@"MessengerInjector",@"version":@"2.0"}

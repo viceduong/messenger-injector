@@ -228,6 +228,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     UIButton *sampleBtn   = [self makeBtn:@"Dump Sample Data"     bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
     UIButton *threadsBtn  = [self makeBtn:@"List Threads"         bg:[UIColor systemTealColor] act:@selector(threadsTapped) h:40];
     UIButton *crashBtn    = [self makeBtn:@"Get Crash Log"        bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
+    UIButton *listFilesBtn = [self makeBtn:@"List All Files"         bg:[UIColor systemPurpleColor] act:@selector(listFilesTapped) h:40];
     UIButton *dumpViewBtn = [self makeBtn:@"Dump View Hierarchy"  bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
 
     // === Results ===
@@ -257,6 +258,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [stack addArrangedSubview:sampleBtn];
     [stack addArrangedSubview:threadsBtn];
     [stack addArrangedSubview:crashBtn];
+    [stack addArrangedSubview:listFilesBtn];
     [stack addArrangedSubview:dumpViewBtn];
     [stack addArrangedSubview:resSec];
     [stack addArrangedSubview:self.resultsView];
@@ -446,6 +448,14 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyCrash object:nil userInfo:@{} deliverImmediately:YES];
     [self flash:@"\U0001F851 crashLog" red:NO];
+}
+
+- (void)listFilesTapped {
+    [self.view endEditing:YES];
+    self.resultsView.text = @"Listing files...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:@"com.messenger.injector.listFiles" object:nil userInfo:@{} deliverImmediately:YES];
+    [self flash:@"\U0001F851 listFiles" red:NO];
 }
 
 - (void)dumpViewTapped {
