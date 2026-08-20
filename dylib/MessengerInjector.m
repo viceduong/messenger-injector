@@ -904,38 +904,44 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
             MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
 
-            // Step 6: Resolve client_threads.pk and client_contacts.pk
-            MI_progress(@"inject: resolving client pks");
+            // Step 6: Resolve thread_pk from client_messages (not client_threads — thread_key differs)
+            MI_progress(@"inject: resolving thread_pk from client_messages");
             long long threadPk = 0;
             {
                 sqlite3_stmt *s = NULL;
-                // client_threads has thread_key column
+                // Find thread_pk from existing messages where either party sent a message
+                NSString *q = [NSString stringWithFormat:
+                    @"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk IN ('%@', '%@') LIMIT 1",
+                    MI_esc(localUid), MI_esc(otherUid)];
+                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+            }
+            // Fallback: try matching by thread_key in client_threads
+            if (threadPk == 0) {
+                sqlite3_stmt *s = NULL;
                 if (sqlite3_prepare_v2(db, "SELECT pk FROM client_threads WHERE thread_key = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
                     sqlite3_bind_text(s, 1, threadKey.UTF8String, -1, SQLITE_TRANSIENT);
                     if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
                     sqlite3_finalize(s);
                 }
             }
-            MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld", threadPk]);
-            [report appendFormat:@"client_threads.pk: %lld\n", threadPk];
-
-            long long localContactPk = 0, otherContactPk = 0;
-            {
+            // Last fallback: first thread_pk from client_messages
+            if (threadPk == 0) {
                 sqlite3_stmt *s = NULL;
-                // client_contacts has id column (FB user id) → pk
-                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_contacts WHERE id = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
-                    sqlite3_bind_text(s, 1, localUid.UTF8String, -1, SQLITE_TRANSIENT);
-                    if (sqlite3_step(s) == SQLITE_ROW) localContactPk = sqlite3_column_int64(s, 0);
-                    sqlite3_finalize(s);
-                }
-                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_contacts WHERE id = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
-                    sqlite3_bind_text(s, 1, otherUid.UTF8String, -1, SQLITE_TRANSIENT);
-                    if (sqlite3_step(s) == SQLITE_ROW) otherContactPk = sqlite3_column_int64(s, 0);
+                if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_pk FROM client_messages LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
                     sqlite3_finalize(s);
                 }
             }
-            MI_progress([NSString stringWithFormat:@"inject: localContactPk=%lld otherContactPk=%lld", localContactPk, otherContactPk]);
-            [report appendFormat:@"client_contacts.pk: local=%lld, other=%lld\n", localContactPk, otherContactPk];
+            MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld", threadPk]);
+            [report appendFormat:@"thread_pk: %lld\n", threadPk];
+
+            // sender_contact_pk = FB user ID directly (no lookup needed — client_messages uses FB IDs as contact pks)
+            long long localContactPk = localUid.longLongValue;
+            long long otherContactPk = otherUid.longLongValue;
+            [report appendFormat:@"sender_contact_pk: local=%lld, other=%lld\n", localContactPk, otherContactPk];
 
             // Find max pk in client_messages for sort_order
             long long maxClientPk = 0;
