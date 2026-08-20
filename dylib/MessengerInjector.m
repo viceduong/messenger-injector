@@ -904,7 +904,51 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
             MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
 
-            // Step 6: INSERT messages
+            // Step 6: Resolve client_threads.pk and client_contacts.pk
+            MI_progress(@"inject: resolving client pks");
+            long long threadPk = 0;
+            {
+                sqlite3_stmt *s = NULL;
+                // client_threads has thread_key column
+                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_threads WHERE thread_key = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                    sqlite3_bind_text(s, 1, threadKey.UTF8String, -1, SQLITE_TRANSIENT);
+                    if (sqlite3_step(s) == SQLITE_ROW) threadPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+            }
+            MI_progress([NSString stringWithFormat:@"inject: threadPk=%lld", threadPk]);
+            [report appendFormat:@"client_threads.pk: %lld\n", threadPk];
+
+            long long localContactPk = 0, otherContactPk = 0;
+            {
+                sqlite3_stmt *s = NULL;
+                // client_contacts has id column (FB user id) → pk
+                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_contacts WHERE id = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                    sqlite3_bind_text(s, 1, localUid.UTF8String, -1, SQLITE_TRANSIENT);
+                    if (sqlite3_step(s) == SQLITE_ROW) localContactPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+                if (sqlite3_prepare_v2(db, "SELECT pk FROM client_contacts WHERE id = ? LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
+                    sqlite3_bind_text(s, 1, otherUid.UTF8String, -1, SQLITE_TRANSIENT);
+                    if (sqlite3_step(s) == SQLITE_ROW) otherContactPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+            }
+            MI_progress([NSString stringWithFormat:@"inject: localContactPk=%lld otherContactPk=%lld", localContactPk, otherContactPk]);
+            [report appendFormat:@"client_contacts.pk: local=%lld, other=%lld\n", localContactPk, otherContactPk];
+
+            // Find max pk in client_messages for sort_order
+            long long maxClientPk = 0;
+            {
+                sqlite3_stmt *s = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT MAX(pk) FROM client_messages", -1, &s, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s) == SQLITE_ROW) maxClientPk = sqlite3_column_int64(s, 0);
+                    sqlite3_finalize(s);
+                }
+            }
+            MI_progress([NSString stringWithFormat:@"inject: maxClientPk=%lld", maxClientPk]);
+
+            // Step 7: INSERT messages
             MI_progress(@"inject: starting transaction");
             sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
 
@@ -966,6 +1010,31 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     errors++;
                     [report appendFormat:@"  [%d] ERROR: %s\n  SQL: %@\n", i+1, errMsg ? errMsg : "?", sql];
                     if (errMsg) sqlite3_free(errMsg);
+                }
+
+                // Also INSERT into client_messages (what the UI actually reads from)
+                if (threadPk > 0 && (localContactPk > 0 || otherContactPk > 0)) {
+                    long long contactPk = [side isEqualToString:@"me"] ? localContactPk : otherContactPk;
+                    NSString *persistentId = [[NSUUID UUID] UUIDString].uppercaseString;
+                    long long clientSortOrder = maxClientPk + i + 1;
+                    NSString *clientSql = [NSString stringWithFormat:
+                        @"INSERT OR IGNORE INTO client_messages ("
+                        @"thread_pk, authoritative_ts_ms, sort_order, display_ts_ms, text, text_size, "
+                        @"sender_contact_pk, send_status, is_hidden, is_tombstoned, is_reply_only, "
+                        @"persistent_id, message_content_type, message_creation_type, primary_sort_key, "
+                        @"should_bump_thread, resonance_offline_threading_id) "
+                        @"VALUES (%lld, %lld, -1, %lld, '%@', 0, "
+                        @"%lld, 2, 0, 0, 0, '
+                        @"%@', 0, 6, %lld, 1, %lld)",
+                        threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
+                    char *err2 = NULL;
+                    int rc2 = sqlite3_exec(db, clientSql.UTF8String, NULL, NULL, &err2);
+                    if (rc2 == SQLITE_OK) {
+                        [report appendFormat:@"       client_messages: inserted (pk~%lld)\n", clientSortOrder];
+                    } else {
+                        [report appendFormat:@"       client_messages ERROR: %s\n", err2 ? err2 : "?"];
+                        if (err2) sqlite3_free(err2);
+                    }
                 }
                 nextOtid++;
             }
