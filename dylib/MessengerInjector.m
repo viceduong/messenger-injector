@@ -1065,6 +1065,40 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
             MI_progress(@"inject: WAL checkpoint done");
 
+            // Update client_threads to bump last activity + snippet
+            if (threadPk > 0) {
+                NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
+                long long lastTs = nowMs;
+                // Get last inserted client_messages pk
+                long long lastMsgPk = 0;
+                {
+                    sqlite3_stmt *s = NULL;
+                    if (sqlite3_prepare_v2(db, "SELECT MAX(pk) FROM client_messages WHERE thread_pk = ?", -1, &s, NULL) == SQLITE_OK) {
+                        sqlite3_bind_int64(s, 1, threadPk);
+                        if (sqlite3_step(s) == SQLITE_ROW) lastMsgPk = sqlite3_column_int64(s, 0);
+                        sqlite3_finalize(s);
+                    }
+                }
+                NSString *updSql = [NSString stringWithFormat:
+                    @"UPDATE client_threads SET "
+                    @"last_activity_authoritative_ts_ms = %lld, "
+                    @"last_activity_timestamp_ms = %lld, "
+                    @"snippet = '%@', "
+                    @"snippet_message_pk = %lld, "
+                    @"last_activity_sort_order = %lld "
+                    @"WHERE pk = %lld",
+                    lastTs, lastTs, MI_esc(lastText), lastMsgPk, lastMsgPk, threadPk];
+                char *upErr = NULL;
+                int upRc = sqlite3_exec(db, upSql.UTF8String, NULL, NULL, &upErr);
+                if (upRc == SQLITE_OK) {
+                    [report appendFormat:@"client_threads updated: snippet=\"%@\" pk=%lld\n", lastText, lastMsgPk];
+                    MI_progress(@"inject: client_threads updated");
+                } else {
+                    [report appendFormat:@"client_threads UPDATE error: %s\n", upErr ? upErr : "?"];
+                    if (upErr) sqlite3_free(upErr);
+                }
+            }
+
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
