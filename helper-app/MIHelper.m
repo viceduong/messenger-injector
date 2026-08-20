@@ -147,6 +147,8 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 // Composer
 @property (nonatomic, strong) UIStackView *messageStack;
 @property (nonatomic, strong) NSMutableArray<MIMessageRow *> *messageRows;
+@property (nonatomic, strong) UIStackView *threadListStack;
+@property (nonatomic, strong) NSMutableArray<UIButton *> *threadButtons;
 @end
 
 @implementation MIHelperVC
@@ -157,6 +159,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     self.title = @"MI Helper v2.0";
     _resultText = @"";
     _messageRows = [NSMutableArray array];
+    _threadButtons = [NSMutableArray array];
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -227,7 +230,13 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     UIButton *findDBBtn   = [self makeBtn:@"Find Database"       bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped)   h:40];
     UIButton *schemaBtn   = [self makeBtn:@"Dump DB Schema"       bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
     UIButton *sampleBtn   = [self makeBtn:@"Dump Sample Data"     bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
-    UIButton *threadsBtn  = [self makeBtn:@"List Threads"         bg:[UIColor systemTealColor] act:@selector(threadsTapped) h:40];
+    UIButton *threadsBtn  = [self makeBtn:@"Scan Threads"         bg:[UIColor systemTealColor] act:@selector(threadsTapped) h:40];
+    
+    // Thread picker list (populated when Scan Threads is tapped)
+    self.threadListStack = [[UIStackView alloc] init];
+    self.threadListStack.axis = UILayoutConstraintAxisVertical;
+    self.threadListStack.spacing = 4;
+    self.threadListStack.translatesAutoresizingMaskIntoConstraints = NO;
     UIButton *crashBtn    = [self makeBtn:@"Get Crash Log"        bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
     UIButton *listFilesBtn = [self makeBtn:@"List All Files"         bg:[UIColor systemPurpleColor] act:@selector(listFilesTapped) h:40];
     UIButton *dumpViewBtn = [self makeBtn:@"Dump View Hierarchy"  bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
@@ -258,6 +267,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [stack addArrangedSubview:schemaBtn];
     [stack addArrangedSubview:sampleBtn];
     [stack addArrangedSubview:threadsBtn];
+    [stack addArrangedSubview:self.threadListStack];
     [stack addArrangedSubview:crashBtn];
     [stack addArrangedSubview:listFilesBtn];
     [stack addArrangedSubview:dumpViewBtn];
@@ -303,6 +313,11 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
                 _resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
                 self.resultsView.text = _resultText;
                 [self.resultsView scrollRangeToVisible:NSMakeRange(0, 0)];
+                
+                // Parse threadList JSON and display tappable buttons
+                if ([tag isEqualToString:@"threadList"]) {
+                    [self populateThreadList:text];
+                }
             });
         }];
 
@@ -435,12 +450,85 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [self flash:@"\U0001F851 dumpSample" red:NO];
 }
 
+- (void)populateThreadList:(NSString *)jsonStr {
+    // Clear old buttons
+    for (UIView *v in self.threadListStack.arrangedSubviews) {
+        [self.threadListStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    [self.threadButtons removeAllObjects];
+    
+    NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *threads = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    if (![threads isKindOfClass:[NSArray class]] || threads.count == 0) {
+        self.resultsView.text = @"No threads found.";
+        return;
+    }
+    
+    self.resultsView.text = [NSString stringWithFormat:@"Found %d threads. Tap one to select.", (int)threads.count];
+    
+    for (NSDictionary *t in threads) {
+        NSString *threadKey = t[@"k"] ?: @"";
+        NSString *name = t[@"n"] ?: @"";
+        NSString *preview = t[@"p"] ?: @"";
+        NSNumber *ts = t[@"t"];
+        
+        // Format timestamp
+        NSString *timeStr = @"";
+        if (ts && ts.longLongValue > 0) {
+            NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts.longLongValue / 1000.0];
+            NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+            fmt.dateFormat = @"MM/dd HH:mm";
+            timeStr = [fmt stringFromDate:date];
+        }
+        
+        // Button title: name (or thread_key) + preview
+        NSString *title;
+        if (name.length > 0) {
+            title = [NSString stringWithFormat:@"%@  [%@]\n%@", name, timeStr, preview];
+        } else {
+            title = [NSString stringWithFormat:@"%@  [%@]\n%@", threadKey, timeStr, preview];
+        }
+        
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+        [btn setTitle:title forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont systemFontOfSize:12];
+        btn.titleLabel.numberOfLines = 2;
+        btn.titleLabel.textAlignment = NSTextAlignmentLeft;
+        btn.backgroundColor = [UIColor secondarySystemBackgroundColor];
+        [btn setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+        btn.layer.cornerRadius = 6;
+        btn.translatesAutoresizingMaskIntoConstraints = NO;
+        [btn.heightAnchor constraintEqualToConstant:50].active = YES;
+        btn.contentEdgeInsets = UIEdgeInsetsMake(4, 8, 4, 8);
+        btn.tag = (int)self.threadButtons.count;
+        [btn addTarget:self action:@selector(threadSelected:) forControlEvents:UIControlEventTouchUpInside];
+        // Store thread key in accessibility label
+        btn.accessibilityLabel = threadKey;
+        
+        [self.threadButtons addObject:btn];
+        [self.threadListStack addArrangedSubview:btn];
+    }
+}
+
+- (void)threadSelected:(UIButton *)btn {
+    NSString *threadKey = btn.accessibilityLabel ?: @"";
+    self.threadField.text = threadKey;
+    [self flash:[NSString stringWithFormat:@"Selected: %@", threadKey] red:NO];
+}
+
 - (void)threadsTapped {
     [self.view endEditing:YES];
-    self.resultsView.text = @"Listing threads...";
+    self.resultsView.text = @"Scanning threads...";
+    // Clear old thread buttons
+    for (UIView *v in self.threadListStack.arrangedSubviews) {
+        [self.threadListStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    [self.threadButtons removeAllObjects];
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
-    [self flash:@"\U0001F851 threads" red:NO];
+    [self flash:@"\U0001F851 scan threads" red:NO];
 }
 
 - (void)crashTapped {

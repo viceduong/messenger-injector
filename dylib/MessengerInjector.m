@@ -629,7 +629,7 @@ static void MI_dumpSample(NSString *dbPath) {
 }
 
 // ============================================================
-// Thread list (NEW v2.0)
+// Thread list — scan + return JSON for helper UI
 // ============================================================
 static void MI_hThreads(void) {
     MI_progress(@"threads: start");
@@ -638,7 +638,7 @@ static void MI_hThreads(void) {
             NSString *dbPath = MI_findDatabase();
             if (!dbPath.length) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    MI_postResult(@"threads", @"No database found. Run Find Database first.");
+                    MI_postResult(@"threads", @"No database found.");
                 });
                 return;
             }
@@ -654,76 +654,72 @@ static void MI_hThreads(void) {
             sqlite3_busy_timeout(db, 5000);
             MI_progress(@"threads: DB opened");
 
-            NSMutableString *result = [NSMutableString string];
-            [result appendFormat:@"=== Threads ===\nDB: %@\n\n", dbPath];
-
-            // Try to list threads from various possible table names
-            NSArray *threadTables = @[@"threads", @"thread", @"messaging_threads", @"chat_threads"];
-            BOOL found = NO;
-
-            for (NSString *table in threadTables) {
-                sqlite3_stmt *s = NULL;
-                NSString *q = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 20", table];
-                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) != SQLITE_OK) continue;
-                found = YES;
-                MI_progress([NSString stringWithFormat:@"threads: found table %@", table]);
-
-                [result appendFormat:@"--- Table: %@ ---\n", table];
-                int cc = sqlite3_column_count(s);
-                for (int c = 0; c < cc; c++) {
-                    [result appendFormat:@"%@%@", @(sqlite3_column_name(s, c)) ?: @"?", c < cc - 1 ? @" | " : @""];
-                }
-                [result appendString:@"\n---\n"];
-                int rn = 0;
-                while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
-                    for (int c = 0; c < cc; c++) {
-                        [result appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(s, c)), c < cc - 1 ? @" | " : @""];
+            // Query: distinct thread_key (FB ID) with last message text + timestamp
+            // Also try to get contact name from contacts table
+            NSMutableArray *threads = [NSMutableArray array];
+            sqlite3_stmt *s = NULL;
+            NSString *q = @"SELECT m.thread_key, MAX(m.timestamp_ms) as last_ts, "
+                          "(SELECT text FROM messages m2 WHERE m2.thread_key = m.thread_key ORDER BY m2.timestamp_ms DESC LIMIT 1) as last_text "
+                          "FROM messages m GROUP BY m.thread_key ORDER BY last_ts DESC LIMIT 50";
+            if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
+                while (sqlite3_step(s) == SQLITE_ROW) {
+                    NSString *threadKey = MI_cstr(sqlite3_column_text(s, 0));
+                    long long lastTs = sqlite3_column_int64(s, 1);
+                    NSString *lastText = MI_cstr(sqlite3_column_text(s, 2));
+                    if (!threadKey || [threadKey isEqualToString:@"NULL"]) continue;
+                    
+                    // Try to get name from contacts table
+                    NSString *name = @"";
+                    sqlite3_stmt *ns = NULL;
+                    NSString *nq = [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id = '%@' LIMIT 1", MI_esc(threadKey)];
+                    if (sqlite3_prepare_v2(db, nq.UTF8String, -1, &ns, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(ns) == SQLITE_ROW) name = MI_cstr(sqlite3_column_text(ns, 0));
+                        sqlite3_finalize(ns);
                     }
-                    [result appendString:@"\n"];
-                    rn++;
+                    
+                    // Truncate last text for display
+                    if (lastText.length > 40) lastText = [lastText substringToIndex:40];
+                    
+                    [threads addObject:@{
+                        @"k": threadKey,
+                        @"n": name ?: @"",
+                        @"p": lastText ?: @"",
+                        @"t": @(lastTs)
+                    }];
                 }
                 sqlite3_finalize(s);
-                [result appendString:@"\n"];
             }
+            MI_progress([NSString stringWithFormat:@"threads: found %d", (int)threads.count]);
 
-            // Also try: list distinct thread_key + sender_id from messages
-            if (!found) {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_key FROM messages LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
-                    [result appendString:@"--- Distinct thread_keys from messages ---\n"];
-                    int rn = 0;
-                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
-                        [result appendFormat:@"%@\n", MI_cstr(sqlite3_column_text(s, 0))];
-                        rn++;
+            // Also try client_threads for names (join via client_messages)
+            if (threads.count > 0) {
+                for (NSMutableDictionary *t in threads) {
+                    if ([t[@"n"] length] > 0) continue; // already has name
+                    // Try client_threads.default_thread_name
+                    sqlite3_stmt *cs = NULL;
+                    NSString *cq = [NSString stringWithFormat:
+                        @"SELECT ct.default_thread_name FROM client_threads ct "
+                        @"JOIN client_messages cm ON cm.thread_pk = ct.pk "
+                        @"JOIN messages m ON cm.resonance_offline_threading_id = m.offline_threading_id "
+                        @"WHERE m.thread_key = '%@' LIMIT 1", MI_esc(t[@"k"])];
+                    if (sqlite3_prepare_v2(db, cq.UTF8String, -1, &cs, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(cs) == SQLITE_ROW) {
+                            NSString *n = MI_cstr(sqlite3_column_text(cs, 0));
+                            if (n.length > 0 && ![n isEqualToString:@"NULL"]) t[@"n"] = n;
+                        }
+                        sqlite3_finalize(cs);
                     }
-                    sqlite3_finalize(s);
-                    [result appendString:@"\n"];
-                }
-            }
-
-            // List distinct senders from messages
-            {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT DISTINCT sender_id FROM messages LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
-                    [result appendString:@"--- Distinct sender_ids from messages ---\n"];
-                    int rn = 0;
-                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
-                        [result appendFormat:@"%@\n", MI_cstr(sqlite3_column_text(s, 0))];
-                        rn++;
-                    }
-                    sqlite3_finalize(s);
                 }
             }
 
             sqlite3_close(db);
 
-            if (result.length == 0) {
-                [result appendString:@"No thread data found."];
-            }
+            // Serialize to JSON
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:threads options:0 error:nil];
+            NSString *jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
 
-            NSString *res = [result copy];
             dispatch_async(dispatch_get_main_queue(), ^{
-                MI_postResult(@"threads", res);
+                MI_postResult(@"threadList", jsonStr ?: @"[]");
             });
         } @catch (NSException *e) {
             dispatch_async(dispatch_get_main_queue(), ^{
