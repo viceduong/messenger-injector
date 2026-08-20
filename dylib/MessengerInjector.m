@@ -973,6 +973,56 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
             MI_progress([NSString stringWithFormat:@"inject: %d inserted, %d errors", inserted, errors]);
 
+            // Verify rows were inserted
+            {
+                sqlite3_stmt *vs = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT count(*) FROM messages WHERE text IN ('A','B')", -1, &vs, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(vs) == SQLITE_ROW) {
+                        long long cnt = sqlite3_column_int64(vs, 0);
+                        [report appendFormat:@"Verify: %lld rows with text A/B found in messages table\n", cnt];
+                        MI_progress([NSString stringWithFormat:@"inject: verify %lld rows found", cnt]);
+                    }
+                    sqlite3_finalize(vs);
+                }
+            }
+
+            // Force WAL checkpoint so changes are written to main DB file
+            sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
+            MI_progress(@"inject: WAL checkpoint done");
+
+            // Dump client_messages schema + sample (this might be what UI reads from)
+            [report appendString:@"\n=== client_messages schema ===\n"];
+            {
+                sqlite3_stmt *cs = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='client_messages'", -1, &cs, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(cs) == SQLITE_ROW) {
+                        [report appendFormat:@"%s\n\n", sqlite3_column_text(cs, 0)];
+                    }
+                    sqlite3_finalize(cs);
+                }
+            }
+            // Dump 3 sample rows from client_messages
+            [report appendString:@"=== client_messages (3 rows) ===\n"];
+            {
+                sqlite3_stmt *cs = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT * FROM client_messages LIMIT 3", -1, &cs, NULL) == SQLITE_OK) {
+                    int cc = sqlite3_column_count(cs);
+                    for (int c = 0; c < cc; c++) {
+                        [report appendFormat:@"%@%@", @(sqlite3_column_name(cs, c)), c < cc-1 ? @" | " : @""];
+                    }
+                    [report appendString:@"\n---\n"];
+                    int rn = 0;
+                    while (sqlite3_step(cs) == SQLITE_ROW && rn < 3) {
+                        for (int c = 0; c < cc; c++) {
+                            [report appendFormat:@"%@%@", MI_cstr(sqlite3_column_text(cs, c)), c < cc-1 ? @" | " : @""];
+                        }
+                        [report appendString:@"\n"];
+                        rn++;
+                    }
+                    sqlite3_finalize(cs);
+                }
+            }
+
             sqlite3_close(db);
 
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
