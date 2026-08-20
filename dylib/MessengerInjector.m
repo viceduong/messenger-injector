@@ -1089,7 +1089,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     @"WHERE pk = %lld",
                     lastTs, lastTs, MI_esc(lastText), lastMsgPk, lastMsgPk, threadPk];
                 char *upErr = NULL;
-                int upRc = sqlite3_exec(db, upSql.UTF8String, NULL, NULL, &upErr);
+                int upRc = sqlite3_exec(db, updSql.UTF8String, NULL, NULL, &upErr);
                 if (upRc == SQLITE_OK) {
                     [report appendFormat:@"client_threads updated: snippet=\"%@\" pk=%lld\n", lastText, lastMsgPk];
                     MI_progress(@"inject: client_threads updated");
