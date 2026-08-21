@@ -231,6 +231,7 @@ static void MI_hThreads(void);
 static void MI_hResearch(NSString *threadId, NSString *mode);
 static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_hSniff(NSString *threadId);
+static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
 static void MI_postResult(NSString *tag, NSString *text);
 
 // ============================================================
@@ -1166,6 +1167,80 @@ static void MI_hSniff(NSString *threadId) {
     });
 }
 
+// Compact snippet-source scan appended to the inject report.
+static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r) {
+    // sync threads rows
+    {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT folder_name, substr(snippet,1,30), last_activity_timestamp_ms FROM threads WHERE thread_key = ? LIMIT 3", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, threadId.UTF8String, -1, SQLITE_TRANSIENT);
+            int n = 0;
+            while (sqlite3_step(st) == SQLITE_ROW && n < 3) {
+                [r appendFormat:@"sniff threads: folder=%@ snippet='%@' lastAct=%lld\n",
+                    MI_cstr(sqlite3_column_text(st,0)) ?: @"NULL", MI_cstr(sqlite3_column_text(st,1)) ?: @"NULL", sqlite3_column_int64(st,2)];
+                n++;
+            }
+            sqlite3_finalize(st);
+            if (n == 0) [r appendString:@"sniff threads: NO ROW\n"];
+        }
+    }
+    // top sync messages (renderer order)
+    {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT substr(text,1,20), sender_id, primary_sort_key, send_status, message_rendering_type FROM messages WHERE thread_key = ? ORDER BY primary_sort_key DESC LIMIT 3", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, threadId.UTF8String, -1, SQLITE_TRANSIENT);
+            int n = 0;
+            while (sqlite3_step(st) == SQLITE_ROW && n < 3) {
+                [r appendFormat:@"sniff msg#%d: '%@' sender=%@ psk=%lld ss=%d mrt=%d\n", n+1,
+                    MI_cstr(sqlite3_column_text(st,0)) ?: @"", MI_cstr(sqlite3_column_text(st,1)) ?: @"?",
+                    sqlite3_column_int64(st,2), sqlite3_column_int(st,3), sqlite3_column_int(st,4)];
+                n++;
+            }
+            sqlite3_finalize(st);
+        }
+    }
+    // EVERY other table with a snippet column, matched to this thread
+    {
+        sqlite3_stmt *ts = NULL;
+        NSMutableArray *tables = [NSMutableArray array];
+        if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", -1, &ts, NULL) == SQLITE_OK) {
+            while (sqlite3_step(ts) == SQLITE_ROW) { NSString *n = MI_cstr(sqlite3_column_text(ts,0)); if (n.length > 0) [tables addObject:n]; }
+            sqlite3_finalize(ts);
+        }
+        for (NSString *tbl in tables) {
+            if ([tbl isEqualToString:@"messages"]) continue;
+            sqlite3_stmt *pi = NULL;
+            NSMutableArray *snipCols = [NSMutableArray array];
+            NSString *keyCol = nil;
+            NSString *q = [NSString stringWithFormat:@"PRAGMA table_info(\"%@\")", tbl];
+            if (sqlite3_prepare_v2(db, q.UTF8String, -1, &pi, NULL) == SQLITE_OK) {
+                while (sqlite3_step(pi) == SQLITE_ROW) {
+                    NSString *c = MI_cstr(sqlite3_column_text(pi,1));
+                    if (!c.length) continue;
+                    NSString *lc = c.lowercaseString;
+                    if ([lc containsString:@"snippet"]) [snipCols addObject:c];
+                    if (!keyCol && ([lc isEqualToString:@"thread_key"] || [lc isEqualToString:@"thread_pk"])) keyCol = c;
+                }
+                sqlite3_finalize(pi);
+            }
+            if (snipCols.count == 0 || !keyCol || [tbl isEqualToString:@"threads"] || [tbl isEqualToString:@"client_threads"]) continue;
+            sqlite3_stmt *rs = NULL;
+            NSMutableString *sel = [NSMutableString string];
+            for (NSString *c in snipCols) [sel appendFormat:@"substr(\"%@\",1,25), ", c];
+            NSString *rq = [NSString stringWithFormat:@"SELECT %@ \"%@\" FROM \"%@\" WHERE \"%@\" = ? LIMIT 1", sel, keyCol, tbl, keyCol];
+            if (sqlite3_prepare_v2(db, rq.UTF8String, -1, &rs, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(rs, 1, threadId.UTF8String, -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(rs) == SQLITE_ROW) {
+                    NSMutableString *vals = [NSMutableString string];
+                    for (int c = 0; c < (int)snipCols.count; c++) [vals appendFormat:@"%@='%@' ", snipCols[c], MI_cstr(sqlite3_column_text(rs,c)) ?: @"NULL"];
+                    [r appendFormat:@"sniff [%@] %@\n", tbl, vals];
+                }
+                sqlite3_finalize(rs);
+            }
+        }
+    }
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -1770,6 +1845,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     if (upErr) sqlite3_free(upErr);
                 }
             }
+
+            MI_sniffInto(db, threadId, threadPk, report);
 
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
