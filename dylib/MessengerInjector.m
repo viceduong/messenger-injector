@@ -1590,10 +1590,25 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     MI_esc(snip), lastIsMe ? localUid : threadId, MI_esc(threadId)];
                 char *e2 = NULL;
                 if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
-                    [report appendString:@"threads (sync) snippet updated\n"];
+                    [report appendFormat:@"threads (sync) snippet updated (%d row(s) matched)\n", sqlite3_changes(db)];
                 } else {
                     [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
                     if (e2) sqlite3_free(e2);
+                }
+                // Readback: what would each layer show?
+                sqlite3_stmt *rb = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT snippet FROM threads WHERE thread_key = ?", -1, &rb, NULL) == SQLITE_OK) {
+                    sqlite3_bind_text(rb, 1, threadId.UTF8String, -1, SQLITE_TRANSIENT);
+                    if (sqlite3_step(rb) == SQLITE_ROW) [report appendFormat:@"readback threads.snippet: %@\n", MI_cstr(sqlite3_column_text(rb,0)) ?: @"NULL"];
+                    else [report appendString:@"readback threads.snippet: NO ROW\n"];
+                    sqlite3_finalize(rb);
+                }
+                rb = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT snippet FROM client_threads WHERE pk = ?", -1, &rb, NULL) == SQLITE_OK) {
+                    sqlite3_bind_int64(rb, 1, threadPk);
+                    if (sqlite3_step(rb) == SQLITE_ROW) [report appendFormat:@"readback client_threads.snippet: %@\n", MI_cstr(sqlite3_column_text(rb,0)) ?: @"NULL"];
+                    else [report appendString:@"readback client_threads.snippet: NO ROW\n"];
+                    sqlite3_finalize(rb);
                 }
             }
 
