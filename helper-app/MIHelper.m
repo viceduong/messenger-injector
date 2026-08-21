@@ -155,6 +155,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) UISwitch *groupSwitch;
 @property (nonatomic, strong) UIStackView *messageStack;
 @property (nonatomic, strong) NSMutableArray<MIMessageRow *> *messageRows;
+@property (nonatomic, strong) UIToolbar *kbToolbar;
+@property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIButton *injectBtn;
 @property (nonatomic, strong) UILabel *resultBanner;
 @property (nonatomic, strong) UITextView *resultsView;
@@ -177,6 +179,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     _threadButtons = [NSMutableArray array];
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
+    self.scroll = scroll;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.showsVerticalScrollIndicator = YES;
     scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
@@ -245,6 +248,12 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.messageStack.spacing = 8;
     self.messageStack.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // Keyboard toolbar (Done) — must exist BEFORE message rows are created
+    self.kbToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+    UIBarButtonItem *doneItem = [[UIBarButtonItem alloc] initWithTitle:@"Done" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
+    UIBarButtonItem *flexItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    self.kbToolbar.items = @[flexItem, doneItem];
+
     [self addMessageRow:YES];   // first row: Me
     [self addMessageRow:NO];   // second row: Them
 
@@ -272,6 +281,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 
     // ---- STEP 3: inject ----
     UILabel *step3 = [self sec:@"3. INJECT"];
+    UIButton *hideKbBtn = [self makeBtn:@"\u2328\uFE0F  Hide keyboard" bg:[UIColor systemGray3Color] act:@selector(dismissKeyboard) h:36];
+    hideKbBtn.titleLabel.font = [UIFont systemFontOfSize:13];
     self.injectBtn = [self makeBtn:@"\U0001F680  Inject into Messenger" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:54];
     [self.injectBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.injectBtn.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
@@ -320,6 +331,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     advNote.numberOfLines = 0;
 
     self.threadField = [self makeField:@"Manual thread ID (if scan can't find it)" UIKeyboardType:UIKeyboardTypeDefault];
+    self.threadField.inputAccessoryView = self.kbToolbar;
 
     UIButton *findDBBtn   = [self makeBtn:@"Find database file"       bg:[UIColor systemGray3Color] act:@selector(findDBTapped)   h:36];
     UIButton *schemaBtn   = [self makeBtn:@"Dump DB schema"           bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:36];
@@ -347,6 +359,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [stack addArrangedSubview:addBtn];
     [stack addArrangedSubview:self.groupRow];
     [stack addArrangedSubview:step3];
+    [stack addArrangedSubview:hideKbBtn];
     [stack addArrangedSubview:self.injectBtn];
     [stack addArrangedSubview:self.resultBanner];
     [stack addArrangedSubview:self.detailsToggleBtn];
@@ -368,14 +381,10 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         [stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-32],
     ]];
 
-    // Keyboard toolbar
-    UIBarButtonItem *doneBtn = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                                                    target:self
-                                                                    action:@selector(dismissKeyboard)];
-    UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIToolbar *kbToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    kbToolbar.items = @[flexSpace, doneBtn];
-    self.threadField.inputAccessoryView = kbToolbar;
+    // Tap on empty space dismisses keyboard
+    UITapGestureRecognizer *tapToDismiss = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
+    tapToDismiss.cancelsTouchesInView = NO;
+    [scroll addGestureRecognizer:tapToDismiss];
 
     // ---- Dylib ready ----
     [[NSDistributedNotificationCenter defaultCenter]
@@ -513,9 +522,9 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [_messageRows addObject:row];
     [_messageStack addArrangedSubview:row];
 
-    UIToolbar *kbToolbar = (UIToolbar *)self.threadField.inputAccessoryView;
-    row.textField.inputAccessoryView = kbToolbar;
-    row.minAgoField.inputAccessoryView = kbToolbar;
+    row.textField.inputAccessoryView = self.kbToolbar;
+    row.minAgoField.inputAccessoryView = self.kbToolbar;
+    self.threadField.inputAccessoryView = self.kbToolbar;
 }
 
 - (void)removeMessageRow:(MIMessageRow *)row {
