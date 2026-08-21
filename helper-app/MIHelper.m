@@ -664,10 +664,14 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         self.resultCard.backgroundColor = [UIColor systemOrangeColor];
         self.resultLabel.textColor = [UIColor whiteColor];
         self.resultLabel.text = [NSString stringWithFormat:@"\u26A0\uFE0F Wrote %@ message(s), but the exact chat was NOT found \u2014 they may be in the wrong chat.", n];
+        self.statusLabel.text = @"\u26A0\uFE0F Done with warnings";
+        self.statusLabel.backgroundColor = [UIColor systemOrangeColor];
     } else {
         self.resultCard.backgroundColor = [UIColor systemGreenColor];
         self.resultLabel.textColor = [UIColor whiteColor];
         self.resultLabel.text = [NSString stringWithFormat:@"\u2705 Wrote %@ message%@ to \"%@\".\nForce-quit Messenger (swipe away), reopen, then check the chat.", n, [n isEqualToString:@"1"] ? @"" : @"s", _selName ?: @""];
+    self.statusLabel.text = [NSString stringWithFormat:@"\u2705 Delivered %@ message%@ to %@", n, [n isEqualToString:@"1"] ? @"" : @"s", _selName ?: @""];
+    self.statusLabel.backgroundColor = [UIColor systemGreenColor];
     }
     _injectPending = NO;
 }

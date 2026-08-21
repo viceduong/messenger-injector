@@ -1576,6 +1576,27 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
+            // Inbox LIST renders snippet from sync-layer `threads`. Minimal update:
+            // only snippet + sender id (v2.7's full-row update crashed; this is the
+            // narrowest possible change - revert if any instability).
+            {
+                NSDictionary *lastMsg = messages.lastObject;
+                NSString *lastText2 = lastMsg[@"t"] ?: @"";
+                BOOL lastIsMe = [lastMsg[@"s"] isEqualToString:@"me"];
+                NSString *snip = lastIsMe ? [NSString stringWithFormat:@"You: %@", lastText2] : lastText2;
+                NSString *upd2 = [NSString stringWithFormat:
+                    @"UPDATE threads SET snippet = '%@', snippet_sender_contact_id = '%@' "
+                    @"WHERE thread_key = '%@'",
+                    MI_esc(snip), lastIsMe ? localUid : threadId, MI_esc(threadId)];
+                char *e2 = NULL;
+                if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
+                    [report appendString:@"threads (sync) snippet updated\n"];
+                } else {
+                    [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
+                    if (e2) sqlite3_free(e2);
+                }
+            }
+
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
