@@ -835,7 +835,7 @@ static void MI_hResearch(NSString *threadId) {
                         NSMutableArray *pks=[NSMutableArray array];
                         while (sqlite3_step(hs)==SQLITE_ROW) [pks addObject:[NSString stringWithFormat:@"%lld", sqlite3_column_int64(hs,0)]];
                         sqlite3_finalize(hs);
-                        if (pks.count) [hits addObject:[NSString stringWithFormat:@"%@\u2192%@", c, [pks componentsJoinedByString:@","]];
+                        if (pks.count) [hits addObject:[NSString stringWithFormat:@"%@\u2192%@", c, [pks componentsJoinedByString:@","]]];
                     }
                 }
                 [r appendFormat:@"target in client_threads: %@\n", (hits.count > 0) ? [hits componentsJoinedByString:@" | "] : @"NO MATCH (no row contains this FB ID)"];
