@@ -1069,7 +1069,7 @@ static void MI_hSniff(NSString *threadId) {
                 }
                 if (cols.count > 0) {
                     NSMutableArray *conds = [NSMutableArray array];
-                    for (NSString *c in cols) [conds addObject:[NSString stringWithFormat:@"\\"%@\\" LIKE '%%%@%%'", c, threadId]];
+                    for (NSString *c in cols) [conds addObject:[NSString stringWithFormat:@"\"%@\" LIKE '%%%@%%'", c, threadId]];
                     sqlite3_stmt *hs = NULL;
                     NSString *hq = [NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE %@ LIMIT 3", [conds componentsJoinedByString:@" OR "]];
                     if (sqlite3_prepare_v2(db, hq.UTF8String, -1, &hs, NULL) == SQLITE_OK) {
@@ -1128,7 +1128,7 @@ static void MI_hSniff(NSString *threadId) {
                     sqlite3_stmt *pi = NULL;
                     NSMutableArray *snipCols = [NSMutableArray array];
                     NSString *keyCol = nil;
-                    NSString *q = [NSString stringWithFormat:@"PRAGMA table_info(\\"%@\\")", tbl];
+                    NSString *q = [NSString stringWithFormat:@"PRAGMA table_info(\"%@\")", tbl];
                     if (sqlite3_prepare_v2(db, q.UTF8String, -1, &pi, NULL) == SQLITE_OK) {
                         while (sqlite3_step(pi) == SQLITE_ROW) {
                             NSString *c = MI_cstr(sqlite3_column_text(pi,1));
@@ -1143,8 +1143,8 @@ static void MI_hSniff(NSString *threadId) {
                     // this table holds snippet data keyed by thread -> dump its row
                     sqlite3_stmt *rs = NULL;
                     NSMutableString *sel = [NSMutableString string];
-                    for (NSString *c in snipCols) [sel appendFormat:@"substr(\\"%@\\",1,30), ", c];
-                    NSString *rq = [NSString stringWithFormat:@"SELECT %@ \\"%@\\" FROM \\"%@\\" WHERE \\"%@\\" = ? LIMIT 2", sel, keyCol, tbl, keyCol];
+                    for (NSString *c in snipCols) [sel appendFormat:@"substr(\"%@\",1,30), ", c];
+                    NSString *rq = [NSString stringWithFormat:@"SELECT %@ \"%@\" FROM \"%@\" WHERE \"%@\" = ? LIMIT 2", sel, keyCol, tbl, keyCol];
                     if (sqlite3_prepare_v2(db, rq.UTF8String, -1, &rs, NULL) == SQLITE_OK) {
                         sqlite3_bind_text(rs, 1, threadId.UTF8String, -1, SQLITE_TRANSIENT);
                         while (sqlite3_step(rs) == SQLITE_ROW) {
@@ -1216,7 +1216,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                             NSString *low = tok.lowercaseString;
                             static NSSet *kw;
                             static dispatch_once_t ot;
-                            dispatch_once(&ot, ^{ kw = [NSSet setWithArray:@[@"if",@"not",@"exists",@"select",@"insert","or","ignore","into","values","update","set","where","delete","from","and","case","when","then","else","end","null","coalesce","cast","length","upper","lower","abs","max","min","sum","count","avg","total","round","typeof","instr","replace","substr","substring","trim","ltrim","rtrim","hex","quote","char","unicode","like","glob","printf","format","date","time","datetime","julianday","strftime","random","randomblob","last_insert_rowid","changes","total_changes","sqlite_source_id","sqlite_version","likely","unlikely","iif","sign"]]; });
+                            dispatch_once(&ot, ^{ kw = [NSSet setWithArray:@[@"if",@"not",@"exists",@"select",@"insert",@"or",@"ignore",@"into",@"values",@"update",@"set",@"where",@"delete",@"from",@"and",@"case",@"when",@"then",@"else",@"end",@"null",@"coalesce",@"cast",@"length",@"upper",@"lower",@"abs",@"max",@"min",@"sum",@"count",@"avg",@"total",@"round",@"typeof",@"instr",@"replace",@"substr",@"substring",@"trim",@"ltrim",@"rtrim",@"hex",@"quote",@"char",@"unicode",@"like",@"glob",@"printf",@"format",@"date",@"time",@"datetime",@"julianday",@"strftime",@"random",@"randomblob",@"last_insert_rowid",@"changes",@"total_changes",@"sqlite_source_id",@"sqlite_version",@"likely",@"unlikely",@"iif",@"sign"]]; });
                             if ([kw containsObject:low]) return;
                             if ([seen containsObject:tok]) return;
                             [seen addObject:tok];
