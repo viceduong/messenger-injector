@@ -701,7 +701,6 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": @"", @"mode": @"sql"} deliverImmediately:YES];
 }
-}
 
 // ============================================================
 // Keyboard
