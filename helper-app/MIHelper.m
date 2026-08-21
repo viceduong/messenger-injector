@@ -388,9 +388,10 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     _injectPending = YES;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (weakSelf && weakSelf->_injectPending) {
-            weakSelf->_injectPending = NO;
-            [weakSelf flash:@"⚠️ No response after 45s. Is Messenger OPEN with the dylib injected?" red:YES];
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf && strongSelf->_injectPending) {
+            strongSelf->_injectPending = NO;
+            [strongSelf flash:@"⚠️ No response after 45s. Is Messenger OPEN with the dylib injected?" red:YES];
         }
     });
     [[NSDistributedNotificationCenter defaultCenter]
