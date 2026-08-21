@@ -2115,7 +2115,17 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             // Force WAL checkpoint so changes are written to main DB file
-            sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
+            // Flush strategy: TRUNCATE moves ALL WAL frames into the main .db file
+            // (the v2.3-v2.6 era behavior that coincided with the list preview
+            // working). It blocks on active readers, so bound it with a short
+            // busy timeout and fall back to PASSIVE - data is committed either way.
+            {
+                sqlite3_busy_timeout(db, 400);
+                if (sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL) != SQLITE_OK) {
+                    sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
+                }
+                sqlite3_busy_timeout(db, 5000);
+            }
             MI_progress(@"inject: WAL checkpoint done");
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
             if (threadPk > 0) {
