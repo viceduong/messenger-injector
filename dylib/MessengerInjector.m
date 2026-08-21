@@ -1322,7 +1322,7 @@ static void MI_hDeepScan(NSString *needle) {
             else {
                 NSMutableArray *files = [NSMutableArray array];
                 NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root]
-                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSFileSizeKey]
+                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLFileSizeKey]
                                                         options:NSDirectoryEnumerationSkipsPackageDescendants
                                                    errorHandler:nil];
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
@@ -1331,8 +1331,8 @@ static void MI_hDeepScan(NSString *needle) {
                     NSNumber *isReg = nil;
                     [u getResourceValue:&isReg forKey:NSURLIsRegularFileKey error:nil];
                     if (![isReg boolValue]) continue;
-                    NSDictionary *sz = [u resourceValuesForKeys:@[NSFileSize] error:nil];
-                    unsigned long long fsz = [sz[NSFileSize] unsignedLongLongValue];
+                    NSDictionary *sz = [u resourceValuesForKeys:@[NSURLFileSizeKey] error:nil];
+                    unsigned long long fsz = [sz[NSURLFileSizeKey] unsignedLongLongValue];
                     if (fsz == 0 || fsz > 80*1024*1024) continue;
                     NSString *name = u.lastPathComponent.lowercaseString;
                     BOOL looksDB = [name hasSuffix:@".db"] || [name hasSuffix:@".sqlite"] || [name hasSuffix:@".store"] || [name containsString:@"lightspeed"];
