@@ -999,6 +999,7 @@ static void MI_hResearch(NSString *threadIdIn, NSString *mode) {
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[1] inject request received"); });
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
             if (!threadId.length || messages.count == 0) {
@@ -1430,6 +1431,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             // Step 7: INSERT messages
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[5] reached insert step"); });
             MI_progress(@"inject: starting transaction");
             sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
 
@@ -1522,6 +1524,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
 
             sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
             MI_progress([NSString stringWithFormat:@"inject: %d inserted, %d errors", inserted, errors]);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", [NSString stringWithFormat:@"[7] inserted=%d errors=%d", inserted, errors]); });
 
             // Verify rows were inserted
             {
@@ -1539,6 +1542,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             // Force WAL checkpoint so changes are written to main DB file
             sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
             MI_progress(@"inject: WAL checkpoint done");
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
             if (threadPk > 0) {
                 NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
                 long long lastTs = nowMs;
