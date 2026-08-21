@@ -169,7 +169,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
-    self.title = @"Notes";
+    self.title = @"MIHelper";
     _resultText = @"";
     _dbLoaded = NO;
     _people = [NSMutableArray array];
