@@ -798,7 +798,7 @@ static long long MI_bridgeResolve(sqlite3 *db, NSString *threadKey, long long li
 // "Trứnh Đừc Linh" -> "trinh duc linh"; "Trinh Duc Linh" -> "trinh duc linh"
 static NSString *MI_normalizeName(NSString *s) {
     if (s.length == 0) return @"";
-    CFMutableStringRef cf = CFStringCreateMutableCopy(NULL, s.length + 16, s);
+    CFMutableStringRef cf = CFStringCreateMutableCopy(NULL, s.length + 16, (__bridge CFStringRef)s);
     CFStringTransform(cf, NULL, kCFStringTransformToLatin, false);
     CFStringTransform(cf, NULL, kCFStringTransformStripDiacritics, false);
     NSString *out = CFBridgingRelease(cf);
