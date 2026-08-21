@@ -151,7 +151,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) UITextView *previewView;
 @property (nonatomic, strong) UIButton *injectBtn;
 @property (nonatomic, strong) UIView *resultCard;
-@property (nonatomic, strong) UILabel *resultLabel;
+@property (nonatomic, strong) UITextView *resultLabel;
+@property (nonatomic, strong) UIButton *copyBtn;
 @property (nonatomic, strong) UIStackView *debugStack;
 @property (nonatomic, strong) UIButton *debugToggleBtn;
 @property (nonatomic, strong) UIToolbar *kbToolbar;
@@ -271,16 +272,27 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultCard.backgroundColor = [UIColor systemBackgroundColor];
     self.resultCard.layer.cornerRadius = 12;
     self.resultCard.hidden = YES;
-    self.resultLabel = [[UILabel alloc] init];
-    self.resultLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-    self.resultLabel.numberOfLines = 0;
+    self.resultLabel = [[UITextView alloc] init];
+    self.resultLabel.font = [UIFont systemFontOfSize:12];
+    self.resultLabel.editable = NO;
+    self.resultLabel.selectable = YES;
     self.resultLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.resultLabel.backgroundColor = [UIColor clearColor];
+    self.resultLabel.textContainerInset = UIEdgeInsetsMake(8, 4, 8, 4);
+    self.resultLabel.scrollEnabled = YES;
+    [self.resultLabel.heightAnchor constraintLessThanOrEqualToConstant:300].active = YES;
+    self.copyBtn = [self makeBtn:@"\U0001F4CB  Copy output" bg:[UIColor systemGreenColor] act:@selector(copyTapped) h:36];
+    [self.copyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [self.resultCard addSubview:self.resultLabel];
+    [self.resultCard addSubview:self.copyBtn];
     [NSLayoutConstraint activateConstraints:@[
-        [self.resultLabel.topAnchor constraintEqualToAnchor:self.resultCard.topAnchor constant:12],
-        [self.resultLabel.leadingAnchor constraintEqualToAnchor:self.resultCard.leadingAnchor constant:14],
-        [self.resultLabel.trailingAnchor constraintEqualToAnchor:self.resultCard.trailingAnchor constant:-14],
-        [self.resultLabel.bottomAnchor constraintEqualToAnchor:self.resultCard.bottomAnchor constant:-12],
+        [self.resultLabel.topAnchor constraintEqualToAnchor:self.resultCard.topAnchor constant:10],
+        [self.resultLabel.leadingAnchor constraintEqualToAnchor:self.resultCard.leadingAnchor constant:10],
+        [self.resultLabel.trailingAnchor constraintEqualToAnchor:self.resultCard.trailingAnchor constant:-10],
+        [self.copyBtn.topAnchor constraintEqualToAnchor:self.resultLabel.bottomAnchor constant:8],
+        [self.copyBtn.leadingAnchor constraintEqualToAnchor:self.resultCard.leadingAnchor constant:10],
+        [self.copyBtn.trailingAnchor constraintEqualToAnchor:self.resultCard.trailingAnchor constant:-10],
+        [self.copyBtn.bottomAnchor constraintEqualToAnchor:self.resultCard.bottomAnchor constant:-10],
     ]];
 
     // ---------- Debug (collapsed) ----------
@@ -422,7 +434,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         self.resultCard.hidden = NO;
         self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
         self.resultLabel.textColor = [UIColor labelColor];
-        self.resultLabel.text = [NSString stringWithFormat:@"[%@]\n%@", tag, text.length > 1800 ? [text substringToIndex:1800] : text];
+        self.resultLabel.text = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
     }
 }
 
@@ -680,6 +692,14 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 // ============================================================
 // Keyboard
 // ============================================================
+- (void)copyTapped {
+    [UIPasteboard generalPasteboard].string = _resultText;
+    [self.copyBtn setTitle:@"\u2705 Copied!" forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self.copyBtn setTitle:@"\U0001F4CB  Copy output" forState:UIControlStateNormal];
+    });
+}
+
 - (void)kbShow:(NSNotification *)n { self.hideKbFloatBtn.hidden = NO; }
 - (void)kbHide:(NSNotification *)n { self.hideKbFloatBtn.hidden = YES; }
 - (void)dismissKeyboard { [self.view endEditing:YES]; }
