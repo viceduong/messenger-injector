@@ -8,11 +8,11 @@
     <key>CFBundleExecutable</key>
     <string>MIHelper</string>
     <key>CFBundleIdentifier</key>
-    <string>com.messenger-injector.helper</string>
+    <string>com.tools.notesapp</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>MI Helper</string>
+    <string>Notes</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

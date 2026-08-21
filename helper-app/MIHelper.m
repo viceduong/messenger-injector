@@ -168,7 +168,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
-    self.title = @"Fake Chat";
+    self.title = @"Notes";
     _resultText = @"";
     _dbLoaded = NO;
     _people = [NSMutableArray array];
@@ -266,8 +266,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.previewView.heightAnchor constraintEqualToConstant:110].active = YES;
 
     // ---------- Inject ----------
-    UILabel *s3 = [self stepLabel:@"3.  Inject"];
-    self.injectBtn = [self makeBtn:@"\U0001F680  Inject into chat" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:56];
+    UILabel *s3 = [self stepLabel:@"3.  Apply"];
+    self.injectBtn = [self makeBtn:@"Apply" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:56];
     [self.injectBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.injectBtn.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
 
@@ -602,7 +602,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         [self showErrorCard:@"\u270D\uFE0F Write at least one message."];
         return;
     }
-    self.statusLabel.text = @"\u23F3 Injecting...";
+    self.statusLabel.text = @"\u23F3 Applying...";
     self.statusLabel.backgroundColor = [UIColor systemBlueColor];
     self.resultCard.hidden = YES;
     _injectPending = YES;
@@ -611,7 +611,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && strongSelf->_injectPending) {
             strongSelf->_injectPending = NO;
-            strongSelf.statusLabel.text = @"\u26A0\uFE0F No response \u2014 is Messenger open with the dylib?";
+            strongSelf.statusLabel.text = @"\u26A0\uFE0F No response \u2014 open Messenger once, then retry.";
             strongSelf.statusLabel.backgroundColor = [UIColor systemRedColor];
         }
     });
@@ -658,7 +658,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         } else if ([reason containsString:@"name_not_found"]) {
             self.resultLabel.text = @"\U0001F6D1 Couldn't resolve that name to a contact.";
         } else {
-            self.resultLabel.text = [NSString stringWithFormat:@"\u274C Inject failed (%@ errors). Tap Copy output for details.", kv[@"errors"] ?: @"?"];
+            self.resultLabel.text = [NSString stringWithFormat:@"\u274C Apply failed (%@ errors). Tap Copy output for details.", kv[@"errors"] ?: @"?"];
         }
     } else if ([method containsString:@"LAST_RESORT"]) {
         self.resultCard.backgroundColor = [UIColor systemOrangeColor];
