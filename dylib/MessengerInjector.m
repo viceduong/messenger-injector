@@ -837,7 +837,39 @@ static void MI_hResearch(NSString *threadId, NSString *mode) {
                         sqlite3_finalize(si2); if(!n3) [r appendString:@"(no user indexes)\n"]; }
                 }
             } else {
+                // ---------- MODE: map (default) ----------
                 [r appendFormat:@"=== MAPPING RESEARCH (target: %@) ===\n", threadId ?: @"(none)"];
+                // name input support (same logic as inject Step 0)
+                {
+                    static NSRegularExpression *digitsOnly2;
+                    static dispatch_once_t onceTok2;
+                    dispatch_once(&onceTok2, ^{ digitsOnly2 = [NSRegularExpression regularExpressionWithPattern:@"^[0-9]+$" options:0 error:NULL]; });
+                    if (threadId.length > 0 && [digitsOnly2 firstMatchInString:threadId options:0 range:NSMakeRange(0, threadId.length)] == nil) {
+                        NSString *want = MI_normalizeName(threadId);
+                        NSMutableArray *ids = [NSMutableArray array];
+                        sqlite3_stmt *sn = NULL;
+                        if (sqlite3_prepare_v2(db, "SELECT id, name FROM contacts", -1, &sn, NULL) == SQLITE_OK) {
+                            while (sqlite3_step(sn) == SQLITE_ROW) {
+                                NSString *id = MI_cstr(sqlite3_column_text(sn, 0));
+                                NSString *nm = MI_cstr(sqlite3_column_text(sn, 1));
+                                if (id.length > 0 && nm.length > 0 && [MI_normalizeName(nm) isEqualToString:want]) { if (![ids containsObject:id]) [ids addObject:id]; [r appendFormat:@"contact match: %@ = %@\n", nm, id]; }
+                            }
+                            sqlite3_finalize(sn);
+                        }
+                        sqlite3_stmt *sc = NULL;
+                        if (sqlite3_prepare_v2(db, "SELECT contact_id, displayed_name FROM client_contacts", -1, &sc, NULL) == SQLITE_OK) {
+                            while (sqlite3_step(sc) == SQLITE_ROW) {
+                                NSString *id = MI_cstr(sqlite3_column_text(sc, 0));
+                                NSString *nm = MI_cstr(sqlite3_column_text(sc, 1));
+                                if (id.length > 0 && nm.length > 0 && [MI_normalizeName(nm) isEqualToString:want]) { if (![ids containsObject:id]) [ids addObject:id]; [r appendFormat:@"client_contact match: %@ = %@\n", nm, id]; }
+                            }
+                            sqlite3_finalize(sc);
+                        }
+                        if (ids.count == 1) { threadId = ids.firstObject; [r appendFormat:@"name resolved to ID: %@\n", threadId]; }
+                        else if (ids.count == 0) { [r appendString:@"NO contact with this name — check spelling.\n"]; }
+                        else { [r appendFormat:@"MULTIPLE matches: %@ — use the numeric ID.\n", [ids componentsJoinedByString:@", "]]; }
+                    }
+                }
                 {
                     sqlite3_stmt *s2=NULL; int total=0;
                     if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name FROM client_threads ORDER BY pk LIMIT 200", -1, &s2, NULL)==SQLITE_OK) {
@@ -964,6 +996,55 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             MI_progress(@"inject: DB opened RW, dummy functions registered");
 
             NSMutableString *report = [NSMutableString string];
+
+            // Step 0: NAME input support — if threadId is not all digits,
+            // treat it as a chat name and resolve via contacts (normalized).
+            // Research finding: user's target ID 1455922134493907 was actually
+            // 'Điện Tử Thái Thắng', NOT the intended 'Trịnh Đức Linh' — typing
+            // the NAME is far safer than a possibly-stale numeric ID.
+            static NSRegularExpression *digitsOnly;
+            static dispatch_once_t onceTok;
+            dispatch_once(&onceTok, ^{ digitsOnly = [NSRegularExpression regularExpressionWithPattern:@"^[0-9]+$" options:0 error:NULL]; });
+            if ([digitsOnly firstMatchInString:threadId options:0 range:NSMakeRange(0, threadId.length)] == nil) {
+                NSString *want = MI_normalizeName(threadId);
+                NSMutableArray *ids = [NSMutableArray array];
+                NSMutableArray *found = [NSMutableArray array];
+                sqlite3_stmt *sn = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT id, name FROM contacts", -1, &sn, NULL) == SQLITE_OK) {
+                    while (sqlite3_step(sn) == SQLITE_ROW) {
+                        NSString *id = MI_cstr(sqlite3_column_text(sn, 0));
+                        NSString *nm = MI_cstr(sqlite3_column_text(sn, 1));
+                        if (id.length > 0 && nm.length > 0 && [MI_normalizeName(nm) isEqualToString:want]) {
+                            if (![ids containsObject:id]) [ids addObject:id];
+                            [found addObject:[NSString stringWithFormat:@"%@ = %@", nm, id]];
+                        }
+                    }
+                    sqlite3_finalize(sn);
+                }
+                sqlite3_stmt *sc = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT contact_id, displayed_name FROM client_contacts", -1, &sc, NULL) == SQLITE_OK) {
+                    while (sqlite3_step(sc) == SQLITE_ROW) {
+                        NSString *id = MI_cstr(sqlite3_column_text(sc, 0));
+                        NSString *nm = MI_cstr(sqlite3_column_text(sc, 1));
+                        if (id.length > 0 && nm.length > 0 && [MI_normalizeName(nm) isEqualToString:want]) {
+                            if (![ids containsObject:id]) [ids addObject:id];
+                            [found addObject:[NSString stringWithFormat:@"%@ = %@", nm, id]];
+                        }
+                    }
+                    sqlite3_finalize(sc);
+                }
+                if (ids.count == 1) {
+                    [report appendFormat:@"name resolved: %@\n", found.firstObject];
+                    threadId = ids.firstObject;
+                } else {
+                    [report appendFormat:@"NAME LOOKUP FAILED for '%@': %@\n", threadId, ids.count == 0 ? @"no contact with this name" : [NSString stringWithFormat:@"multiple matches: %@", [found componentsJoinedByString:@", "]]];
+                    [report appendString:@"ABORT: use the exact chat name, or a numeric thread ID.\n"];
+                    [report appendFormat:@"@@MIRESULT|ok=0|inserted=0|errors=1|thread_pk=0|method=name_lookup|name=%@|thread_id=%@|reason=name_not_found|@@\n", threadId, threadId];
+                    sqlite3_close(db);
+                    MI_postResult(@"inject", report);
+                    return;
+                }
+            }
 
             // Step 1: Resolve thread_key from existing messages
             MI_progress(@"inject: resolving thread_key");
@@ -1152,8 +1233,12 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     if (sqlite3_prepare_v2(db, q2b.UTF8String, -1, &s2b, NULL) == SQLITE_OK) {
                         NSMutableArray *cands = [NSMutableArray array];
                         while (sqlite3_step(s2b) == SQLITE_ROW) {
-                            [cands addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", sqlite3_column_int64(s2b,0), sqlite3_column_int64(s2b,1)]];
-                            if (threadPk == 0) { threadPk = sqlite3_column_int64(s2b, 0); pkMethod = @"sender_contact_pk"; }
+                            long long pk = sqlite3_column_int64(s2b,0);
+                            long long n = sqlite3_column_int64(s2b,1);
+                            // n>=3: our own leftover test injections show up as tiny counts
+                            if (n < 3) { [cands addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld IGNORED-contamination)", pk, n]]; continue; }
+                            [cands addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", pk, n]];
+                            if (threadPk == 0) { threadPk = pk; pkMethod = @"sender_contact_pk"; }
                         }
                         sqlite3_finalize(s2b);
                         [report appendFormat:@"[research] sender_contact_pk: %@\n", cands.count ? [cands componentsJoinedByString:@", "] : @"none"];

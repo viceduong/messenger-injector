@@ -306,7 +306,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.debugStack.hidden = YES;
 
     self.manualTidField = [[UITextField alloc] init];
-    self.manualTidField.placeholder = @"Manual thread ID (used by Inject if no chat picked)";
+    self.manualTidField.placeholder = @"Chat name or thread ID (e.g. Trinh Duc Linh)";
     self.manualTidField.borderStyle = UITextBorderStyleRoundedRect;
     self.manualTidField.font = [UIFont systemFontOfSize:13];
     self.manualTidField.autocorrectionType = UITextAutocorrectionTypeNo;
