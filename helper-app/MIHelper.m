@@ -157,6 +157,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) NSMutableArray<MIMessageRow *> *messageRows;
 @property (nonatomic, strong) UIToolbar *kbToolbar;
 @property (nonatomic, strong) UIScrollView *scroll;
+@property (nonatomic, strong) UIButton *hideKbFloatBtn;
 @property (nonatomic, strong) UIButton *injectBtn;
 @property (nonatomic, strong) UILabel *resultBanner;
 @property (nonatomic, strong) UITextView *resultsView;
@@ -385,6 +386,29 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UITapGestureRecognizer *tapToDismiss = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     tapToDismiss.cancelsTouchesInView = NO;
     [scroll addGestureRecognizer:tapToDismiss];
+
+    // Floating "Hide ⌨️" button — pinned top-right, visible whenever keyboard is up
+    // (stays reachable no matter which field is focused)
+    self.hideKbFloatBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.hideKbFloatBtn setTitle:@"\u2328\uFE0F Hide" forState:UIControlStateNormal];
+    self.hideKbFloatBtn.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.hideKbFloatBtn.layer.cornerRadius = 16;
+    self.hideKbFloatBtn.layer.borderWidth = 1;
+    self.hideKbFloatBtn.layer.borderColor = [UIColor systemGray3Color].CGColor;
+    self.hideKbFloatBtn.layer.shadowOpacity = 0.2;
+    self.hideKbFloatBtn.layer.shadowRadius = 4;
+    self.hideKbFloatBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    self.hideKbFloatBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    self.hideKbFloatBtn.hidden = YES;
+    [self.hideKbFloatBtn addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.hideKbFloatBtn];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.hideKbFloatBtn.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12],
+        [self.hideKbFloatBtn.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:64],
+        [self.hideKbFloatBtn.heightAnchor constraintEqualToConstant:32],
+    ]];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(kbWillShow:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(kbWillHide:) name:UIKeyboardWillHideNotification object:nil];
 
     // ---- Dylib ready ----
     [[NSDistributedNotificationCenter defaultCenter]
@@ -767,8 +791,15 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     return b;
 }
 
+- (void)kbWillShow:(NSNotification *)n { self.hideKbFloatBtn.hidden = NO; }
+- (void)kbWillHide:(NSNotification *)n { self.hideKbFloatBtn.hidden = YES; }
+
 - (void)dismissKeyboard {
     [self.view endEditing:YES];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)tf {
