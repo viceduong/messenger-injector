@@ -1583,8 +1583,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             // otherwise our writes fail with "no such function" when triggers fire.
             {
                 sqlite3_stmt *ts = NULL;
-                NSMutableSet *seen = [NSMutableSet setWithObjects:@"thread_read_status_triggers_enabled", @"thread_read_status_triggers_enabled_v2", nil];
-                if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL", -1, &ts, NULL) == SQLITE_OK) {
+                NSMutableSet *seen = [NSMutableSet setWithObjects:@"thread_read_status_triggers_enabled", @"thread_read_status_triggers_enabled_v2", @"actor_id_for_sync_group", nil];
+                if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('trigger','table','view')", -1, &ts, NULL) == SQLITE_OK) {
                     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"[a-zA-Z_][a-zA-Z0-9_]*[ ]*\\(" options:0 error:NULL];
                     while (sqlite3_step(ts) == SQLITE_ROW) {
                         NSString *sql = MI_cstr(sqlite3_column_text(ts, 0)) ?: @"";
