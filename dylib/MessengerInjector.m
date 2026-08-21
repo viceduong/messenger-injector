@@ -854,6 +854,11 @@ static void MI_hResearch(NSString *threadIdIn, NSString *mode) {
             if ([mode isEqualToString:@"sql"]) {
                 [r appendString:@"=== SQL LOGIC (app's own views/triggers/indexes) ===\n"];
                 {
+                    sqlite3_stmt *s0=NULL;
+                    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", -1, &s0, NULL)==SQLITE_OK){
+                        [r appendString:@"TABLES: "]; int n0=0;
+                        while(sqlite3_step(s0)==SQLITE_ROW && n0<120){ [r appendFormat:@"%@ ", MI_cstr(sqlite3_column_text(s0,0)) ?: @"?"]; n0++; }
+                        sqlite3_finalize(s0); [r appendString:@"\n"]; }
                     sqlite3_stmt *s2=NULL; int n=0;
                     if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL ORDER BY name", -1, &s2, NULL)==SQLITE_OK){
                         while(sqlite3_step(s2)==SQLITE_ROW && n<12){ NSString *vs=MI_cstr(sqlite3_column_text(s2,1)) ?: @""; if (vs.length>130) vs=[vs substringToIndex:130]; [r appendFormat:@"[view %@] %@\n", MI_cstr(sqlite3_column_text(s2,0)) ?: @"?", vs]; n++; }
