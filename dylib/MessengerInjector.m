@@ -656,64 +656,94 @@ static void MI_hThreads(void) {
             sqlite3_busy_timeout(db, 5000);
             MI_progress(@"threads: DB opened");
 
-            // Query: distinct thread_key (FB ID) with last message text + timestamp
-            // Also try to get contact name from contacts table
-            NSMutableArray *threads = [NSMutableArray array];
-            sqlite3_stmt *s = NULL;
-            NSString *q = @"SELECT m.thread_key, MAX(m.timestamp_ms) as last_ts, "
-                          "(SELECT text FROM messages m2 WHERE m2.thread_key = m.thread_key ORDER BY m2.timestamp_ms DESC LIMIT 1) as last_text "
-                          "FROM messages m GROUP BY m.thread_key ORDER BY last_ts DESC LIMIT 50";
-            if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                while (sqlite3_step(s) == SQLITE_ROW) {
-                    NSString *threadKey = MI_cstr(sqlite3_column_text(s, 0));
-                    long long lastTs = sqlite3_column_int64(s, 1);
-                    NSString *lastText = MI_cstr(sqlite3_column_text(s, 2));
-                    if (!threadKey || [threadKey isEqualToString:@"NULL"]) continue;
-                    
-                    // Try to get name from contacts table
-                    NSString *name = @"";
-                    sqlite3_stmt *ns = NULL;
-                    NSString *nq = [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id = '%@' LIMIT 1", MI_esc(threadKey)];
-                    if (sqlite3_prepare_v2(db, nq.UTF8String, -1, &ns, NULL) == SQLITE_OK) {
-                        if (sqlite3_step(ns) == SQLITE_ROW) name = MI_cstr(sqlite3_column_text(ns, 0));
-                        sqlite3_finalize(ns);
-                    }
-                    
-                    // Truncate last text for display
-                    if (lastText.length > 40) lastText = [lastText substringToIndex:40];
-                    
-                    NSMutableDictionary *t = [NSMutableDictionary dictionary];
-                    t[@"k"] = threadKey;
-                    t[@"n"] = name ?: @"";
-                    t[@"p"] = lastText.length > 0 ? lastText : @"";
-                    t[@"t"] = @(lastTs);
-                    [threads addObject:t];
-                }
-                sqlite3_finalize(s);
-            }
-            MI_progress([NSString stringWithFormat:@"threads: found %d", (int)threads.count]);
+            // Local user id from DB filename (<uid>.db)
+            NSString *fname = dbPath.lastPathComponent ?: @"";
+            NSString *localUid = @"";
+            { NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"^([0-9]+)\\.db$" options:0 error:NULL];
+              NSTextCheckingResult *m = [re firstMatchInString:fname options:0 range:NSMakeRange(0, fname.length)];
+              if (m.numberOfRanges > 1) localUid = [fname substringWithRange:[m rangeAtIndex:1]]; }
 
-            // Enrich names from the sync-layer contacts table (fast, no joins).
-            // 1-on-1 thread_key = other person's FB ID = contacts.id.
-            if (threads.count > 0) {
-                for (NSMutableDictionary *t in threads) {
-                    if ([t[@"n"] length] > 0) continue; // already has name
-                    sqlite3_stmt *cs = NULL;
-                    NSString *cq = [NSString stringWithFormat:
-                        @"SELECT name FROM contacts WHERE id = '%@' LIMIT 1", MI_esc(t[@"k"])];
-                    if (sqlite3_prepare_v2(db, cq.UTF8String, -1, &cs, NULL) == SQLITE_OK) {
-                        if (sqlite3_step(cs) == SQLITE_ROW) {
-                            NSString *n = MI_cstr(sqlite3_column_text(cs, 0));
-                            if (n.length > 0 && ![n isEqualToString:@"NULL"]) t[@"n"] = n;
+            // PASS 1 (single scan): for each client thread, who (non-local) sent the most
+            // messages. Proven resolver: other party of a 1-on-1 = top non-local sender.
+            NSMutableDictionary *bestSender = [NSMutableDictionary dictionary]; // pk -> @{id,n}
+            {
+                sqlite3_stmt *s1 = NULL;
+                NSString *q1 = nil;
+                if (localUid.length > 0) {
+                    q1 = [NSString stringWithFormat:
+                        @"SELECT thread_pk, sender_contact_pk, COUNT(*) c FROM client_messages "
+                         "WHERE sender_contact_pk IS NOT NULL AND sender_contact_pk != %@ "
+                         "GROUP BY thread_pk, sender_contact_pk ORDER BY c DESC LIMIT 4000", localUid];
+                } else {
+                    q1 = @"SELECT thread_pk, sender_contact_pk, COUNT(*) c FROM client_messages "
+                          "WHERE sender_contact_pk IS NOT NULL "
+                          "GROUP BY thread_pk, sender_contact_pk ORDER BY c DESC LIMIT 4000";
+                }
+                if (sqlite3_prepare_v2(db, q1.UTF8String, -1, &s1, NULL) == SQLITE_OK) {
+                    while (sqlite3_step(s1) == SQLITE_ROW) {
+                        long long pk = sqlite3_column_int64(s1, 0);
+                        long long sid = sqlite3_column_int64(s1, 1);
+                        long long n = sqlite3_column_int64(s1, 2);
+                        NSString *key = [NSString stringWithFormat:@"%lld", pk];
+                        if (bestSender[key] == nil && n >= 3) { // n>=3 skips leftover test injections
+                            bestSender[key] = [NSMutableDictionary dictionary];
+                            bestSender[key][@"id"] = [NSString stringWithFormat:@"%lld", sid];
+                            bestSender[key][@"n"] = @(n);
                         }
-                        sqlite3_finalize(cs);
                     }
+                    sqlite3_finalize(s1);
+                }
+            }
+            MI_progress([NSString stringWithFormat:@"threads: senders mapped (%d)", (int)bestSender.count]);
+
+            // PASS 2: all materialized chats with names
+            NSMutableArray *threads = [NSMutableArray array];
+            {
+                sqlite3_stmt *s2 = NULL;
+                if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name FROM client_threads ORDER BY pk LIMIT 300", -1, &s2, NULL) == SQLITE_OK) {
+                    while (sqlite3_step(s2) == SQLITE_ROW) {
+                        long long pk = sqlite3_column_int64(s2, 0);
+                        NSString *name = MI_cstr(sqlite3_column_text(s2, 1));
+                        if (name.length == 0 || [name isEqualToString:@"NULL"]) name = [NSString stringWithFormat:@"Thread %lld", pk];
+                        NSString *key = [NSString stringWithFormat:@"%lld", pk];
+                        NSDictionary *bs = bestSender[key];
+                        NSMutableDictionary *t = [NSMutableDictionary dictionary];
+                        t[@"k"] = bs[@"id"] ?: @"";
+                        t[@"n"] = name;
+                        t[@"p"] = [NSString stringWithFormat:@"%lld", pk];
+                        t[@"t"] = bs[@"n"] ?: @(0);
+                        [threads addObject:t];
+                    }
+                    sqlite3_finalize(s2);
+                }
+            }
+
+            // PASS 3: chats without a resolved FB ID -> try entity_id in profile URL columns
+            for (NSMutableDictionary *t in threads) {
+                if ([t[@"k"] length] > 0) continue;
+                sqlite3_stmt *s3 = NULL;
+                NSString *q3 = [NSString stringWithFormat:
+                    @"SELECT default_other_participant_profile_picture_fallback_url_list, "
+                     "default_other_participant_profile_picture_url_list FROM client_threads WHERE pk = %@ LIMIT 1", t[@"p"]];
+                if (sqlite3_prepare_v2(db, q3.UTF8String, -1, &s3, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(s3) == SQLITE_ROW) {
+                        NSMutableString *urls = [NSMutableString string];
+                        for (int c = 0; c < 2; c++) { NSString *v = MI_cstr(sqlite3_column_text(s3, c)); if (v.length > 0) [urls appendString:v]; }
+                        NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"entity_id=([0-9]+)" options:0 error:NULL];
+                        NSTextCheckingResult *m = [re firstMatchInString:urls options:0 range:NSMakeRange(0, urls.length)];
+                        if (m.numberOfRanges > 1) t[@"k"] = [urls substringWithRange:[m rangeAtIndex:1]];
+                    }
+                    sqlite3_finalize(s3);
                 }
             }
 
             sqlite3_close(db);
 
-            // Serialize to JSON
+            // Sort by name
+            [threads sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+                return [a[@"n"] compare:b[@"n"] options:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch];
+            }];
+
             NSData *jsonData = [NSJSONSerialization dataWithJSONObject:threads options:0 error:nil];
             NSString *jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
 

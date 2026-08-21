@@ -1,9 +1,11 @@
 /**
- * MIHelper v3.0 — intuitive 3-step UX for MessengerInjector
+ * MIHelper v4.0 — auto-DB + search + select + inject
  *
- *   STEP 1: Pick a chat   (tap card → scan → tap a chat)
- *   STEP 2: Write messages (Me/Them rows + LIVE bubble preview)
- *   STEP 3: Inject         (big button → plain-English result)
+ *   1. Auto-reads Messenger DB on launch (status shows progress)
+ *   2. Search bar filters people by name (diacritic-insensitive)
+ *   3. Tap a person to select
+ *   4. Compose messages (Me/Them) with live preview
+ *   5. Inject -> plain-English result
  *
  * Build:
  *   xcrun clang -arch arm64 \
@@ -16,6 +18,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wcocoa-api-design"
@@ -66,7 +69,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         self.layer.cornerRadius = 10;
         _isMe = YES;
 
-        _sideControl = [[UISegmentedControl alloc] initWithItems:@[@"\U0001F9D1 Me", @"\U0001F9D1\u200d Th"]];
+        _sideControl = [[UISegmentedControl alloc] initWithItems:@[@"\U0001F9D1 Me", @"\U0001F464 Them"]];
         _sideControl.translatesAutoresizingMaskIntoConstraints = NO;
         _sideControl.selectedSegmentIndex = 0;
         [_sideControl setTitleTextAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:11 weight:UIFontWeightMedium]} forState:UIControlStateNormal];
@@ -78,7 +81,6 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         _textField.borderStyle = UITextBorderStyleRoundedRect;
         _textField.font = [UIFont systemFontOfSize:14];
         _textField.autocorrectionType = UITextAutocorrectionTypeNo;
-        __weak typeof(self) weakSelf = self;
         [_textField addTarget:self action:@selector(textChanged) forControlEvents:UIControlEventEditingChanged];
 
         _minAgoField = [[UITextField alloc] init];
@@ -135,17 +137,17 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @interface MIHelperVC : UIViewController <UITextFieldDelegate>
 {
     NSString *_resultText;
-    BOOL _dylibReady;
-    NSString *_selThreadID;
-    NSString *_selThreadName;
+    BOOL _dbLoaded;
     BOOL _injectPending;
+    NSMutableArray *_people;      // [{k,n,p,t}]
+    NSMutableArray *_personBtns;  // visible buttons
 }
 @property (nonatomic, strong) UILabel *statusLabel;
-@property (nonatomic, strong) UIView *chatCard;
-@property (nonatomic, strong) UILabel *chatCardTitle;
-@property (nonatomic, strong) UILabel *chatCardSub;
-@property (nonatomic, strong) UIStackView *threadListStack;
-@property (nonatomic, strong) NSMutableArray<UIButton *> *threadButtons;
+@property (nonatomic, strong) UITextField *searchField;
+@property (nonatomic, strong) UILabel *selectedLabel;   // shows chosen person
+@property (nonatomic, strong) UIStackView *peopleListStack;
+@property (nonatomic, strong) UIScrollView *peopleScroll;
+@property (nonatomic, strong) NSLayoutConstraint *peopleScrollH;
 @property (nonatomic, strong) UIStackView *messageStack;
 @property (nonatomic, strong) NSMutableArray<MIMessageRow *> *messageRows;
 @property (nonatomic, strong) UITextView *previewView;
@@ -157,7 +159,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) UIButton *debugToggleBtn;
 @property (nonatomic, strong) UIToolbar *kbToolbar;
 @property (nonatomic, strong) UIButton *hideKbFloatBtn;
-@property (nonatomic, strong) UITextField *manualTidField;
+@property (nonatomic, copy) NSString *selID;
+@property (nonatomic, copy) NSString *selName;
 @end
 
 @implementation MIHelperVC
@@ -167,11 +170,12 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
     self.title = @"Fake Chat";
     _resultText = @"";
-    _dylibReady = NO;
+    _dbLoaded = NO;
+    _people = [NSMutableArray array];
+    _personBtns = [NSMutableArray array];
 
     UIScrollView *scroll = [[UIScrollView alloc] init];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    scroll.showsVerticalScrollIndicator = YES;
     scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     [self.view addSubview:scroll];
 
@@ -187,50 +191,52 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.statusLabel.backgroundColor = [UIColor systemOrangeColor];
     self.statusLabel.layer.cornerRadius = 8;
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
-    self.statusLabel.text = @"Waiting for dylib — open Messenger once after injecting it";
+    self.statusLabel.numberOfLines = 1;
+    self.statusLabel.text = @"\U00023F3 Reading Messenger database... (open Messenger once)";
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [self.statusLabel.heightAnchor constraintEqualToConstant:34].active = YES;
 
-    // ---------- STEP 1: chat card ----------
-    self.chatCard = [[UIView alloc] init];
-    self.chatCard.translatesAutoresizingMaskIntoConstraints = NO;
-    self.chatCard.backgroundColor = [UIColor systemBackgroundColor];
-    self.chatCard.layer.cornerRadius = 12;
-    self.chatCard.userInteractionEnabled = YES;
-    [self.chatCard addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(chatCardTapped)]];
+    // ---------- Search ----------
+    self.searchField = [[UITextField alloc] init];
+    self.searchField.placeholder = @"\U0001F50D Search person...";
+    self.searchField.borderStyle = UITextBorderStyleRoundedRect;
+    self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.searchField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.searchField.font = [UIFont systemFontOfSize:15];
+    self.searchField.delegate = self;
+    self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.searchField.heightAnchor constraintEqualToConstant:40].active = YES;
+    [self.searchField addTarget:self action:@selector(searchChanged) forControlEvents:UIControlEventEditingChanged];
 
-    self.chatCardTitle = [[UILabel alloc] init];
-    self.chatCardTitle.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    self.chatCardTitle.text = @"1.  Pick a chat";
-    self.chatCardTitle.translatesAutoresizingMaskIntoConstraints = NO;
+    // ---------- Selected person ----------
+    self.selectedLabel = [[UILabel alloc] init];
+    self.selectedLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    self.selectedLabel.textColor = [UIColor secondaryLabelColor];
+    self.selectedLabel.numberOfLines = 0;
+    self.selectedLabel.text = @"No person selected \u2014 search & tap above";
 
-    self.chatCardSub = [[UILabel alloc] init];
-    self.chatCardSub.font = [UIFont systemFontOfSize:14];
-    self.chatCardSub.textColor = [UIColor secondaryLabelColor];
-    self.chatCardSub.text = @"Tap here to scan your Messenger chats";
-    self.chatCardSub.numberOfLines = 0;
-    self.chatCardSub.translatesAutoresizingMaskIntoConstraints = NO;
+    // ---------- People list (scrollable, max height) ----------
+    self.peopleScroll = [[UIScrollView alloc] init];
+    self.peopleScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    self.peopleScroll.showsVerticalScrollIndicator = YES;
+    self.peopleScroll.hidden = YES;
+    self.peopleScrollH = [self.peopleScroll.heightAnchor constraintEqualToConstant:220];
+    self.peopleScrollH.active = YES;
 
-    [self.chatCard addSubview:self.chatCardTitle];
-    [self.chatCard addSubview:self.chatCardSub];
+    self.peopleListStack = [[UIStackView alloc] init];
+    self.peopleListStack.axis = UILayoutConstraintAxisVertical;
+    self.peopleListStack.spacing = 6;
+    self.peopleListStack.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [self.peopleScroll addSubview:self.peopleListStack];
     [NSLayoutConstraint activateConstraints:@[
-        [self.chatCardTitle.topAnchor constraintEqualToAnchor:self.chatCard.topAnchor constant:14],
-        [self.chatCardTitle.leadingAnchor constraintEqualToAnchor:self.chatCard.leadingAnchor constant:14],
-        [self.chatCardTitle.trailingAnchor constraintEqualToAnchor:self.chatCard.trailingAnchor constant:-14],
-        [self.chatCardSub.topAnchor constraintEqualToAnchor:self.chatCardTitle.bottomAnchor constant:6],
-        [self.chatCardSub.leadingAnchor constraintEqualToAnchor:self.chatCardTitle.leadingAnchor],
-        [self.chatCardSub.trailingAnchor constraintEqualToAnchor:self.chatCardTitle.trailingAnchor],
-        [self.chatCardSub.bottomAnchor constraintEqualToAnchor:self.chatCard.bottomAnchor constant:-14],
+        [self.peopleListStack.topAnchor constraintEqualToAnchor:self.peopleScroll.topAnchor constant:8],
+        [self.peopleListStack.leadingAnchor constraintEqualToAnchor:self.peopleScroll.leadingAnchor constant:8],
+        [self.peopleListStack.widthAnchor constraintEqualToAnchor:self.peopleScroll.widthAnchor constant:-16],
+        [self.peopleListStack.bottomAnchor constraintEqualToAnchor:self.peopleScroll.bottomAnchor constant:-8],
     ]];
 
-    self.threadListStack = [[UIStackView alloc] init];
-    self.threadListStack.axis = UILayoutConstraintAxisVertical;
-    self.threadListStack.spacing = 6;
-    self.threadListStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.threadListStack.hidden = YES;
-    self.threadButtons = [NSMutableArray array];
-
-    // ---------- STEP 2: messages ----------
+    // ---------- Messages ----------
     UILabel *s2 = [self stepLabel:@"2.  Write the conversation"];
     self.messageStack = [[UIStackView alloc] init];
     self.messageStack.axis = UILayoutConstraintAxisVertical;
@@ -244,7 +250,6 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UIButton *addBtn = [self makeBtn:@"+  Add message" bg:[UIColor secondarySystemBackgroundColor] act:@selector(addRowTapped) h:40];
     [addBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
 
-    // preview
     UILabel *prevLabel = [[UILabel alloc] init];
     prevLabel.text = @"How it will look:";
     prevLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
@@ -253,16 +258,16 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.previewView = [[UITextView alloc] init];
     self.previewView.editable = NO;
     self.previewView.selectable = NO;
-    self.previewView.font = [UIFont systemFontOfSize:13];
+    self.previewView.font = [UIFont fontWithName:@"Menlo-Regular" size:12];
     self.previewView.backgroundColor = [UIColor secondarySystemBackgroundColor];
     self.previewView.layer.cornerRadius = 10;
     self.previewView.text = @"(empty)";
     self.previewView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.previewView.heightAnchor constraintEqualToConstant:110].active = YES;
 
-    // ---------- STEP 3: inject ----------
+    // ---------- Inject ----------
     UILabel *s3 = [self stepLabel:@"3.  Inject"];
-    self.injectBtn = [self makeBtn:@"\U0001F680  Inject into Messenger" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:56];
+    self.injectBtn = [self makeBtn:@"\U0001F680  Inject into chat" bg:[UIColor systemBlueColor] act:@selector(injectTapped) h:56];
     [self.injectBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.injectBtn.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
 
@@ -278,10 +283,9 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.selectable = YES;
     self.resultLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.resultLabel.backgroundColor = [UIColor clearColor];
-    self.resultLabel.textContainerInset = UIEdgeInsetsMake(8, 4, 8, 4);
     self.resultLabel.scrollEnabled = YES;
     [self.resultLabel.heightAnchor constraintLessThanOrEqualToConstant:300].active = YES;
-    self.outputCopyBtn = [self makeBtn:@"\U0001F4CB  Copy output" bg:[UIColor systemGreenColor] act:@selector(copyTapped) h:36];
+    self.outputCopyBtn = [self makeBtn:@"\U0001F4CB  Copy output" bg:[UIColor systemGreenColor] act:@selector(copyOutputTapped) h:36];
     [self.outputCopyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [self.resultCard addSubview:self.resultLabel];
     [self.resultCard addSubview:self.outputCopyBtn];
@@ -296,7 +300,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     ]];
 
     // ---------- Debug (collapsed) ----------
-    self.debugToggleBtn = [self makeBtn:@"⚙️  Advanced / debug (thread ID, schema, research...)" bg:[UIColor secondarySystemBackgroundColor] act:@selector(toggleDebugTapped) h:40];
+    self.debugToggleBtn = [self makeBtn:@"\u2699\uFE0F  Advanced / debug" bg:[UIColor secondarySystemBackgroundColor] act:@selector(toggleDebugTapped) h:40];
     self.debugToggleBtn.titleLabel.font = [UIFont systemFontOfSize:13];
 
     self.debugStack = [[UIStackView alloc] init];
@@ -305,16 +309,10 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.debugStack.translatesAutoresizingMaskIntoConstraints = NO;
     self.debugStack.hidden = YES;
 
-    self.manualTidField = [[UITextField alloc] init];
-    self.manualTidField.placeholder = @"Chat name or thread ID (e.g. Trinh Duc Linh)";
-    self.manualTidField.borderStyle = UITextBorderStyleRoundedRect;
-    self.manualTidField.font = [UIFont systemFontOfSize:13];
-    self.manualTidField.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.manualTidField.translatesAutoresizingMaskIntoConstraints = NO;
-
-    UIButton *scanBtn = [self makeBtn:@"Scan chats (list IDs)" bg:[UIColor secondarySystemBackgroundColor] act:@selector(threadsTapped) h:40];
-    UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Research thread mapping (uses ID above)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
-    UIButton *sqlBtn = [self makeBtn:@"📜  Research SQL logic" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    UIButton *rescanBtn = [self makeBtn:@"\U0001F504  Re-read database" bg:[UIColor systemTealColor] act:@selector(rescanTapped) h:40];
+    UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Research mapping (selected person)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
+    UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Research SQL logic" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *findDBBtn = [self makeBtn:@"Find database file" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
     UIButton *schemaBtn = [self makeBtn:@"Dump DB schema" bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
@@ -322,8 +320,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UIButton *crashBtn = [self makeBtn:@"Get crash log" bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
     UIButton *listBtn = [self makeBtn:@"List all files" bg:[UIColor systemPurpleColor] act:@selector(listFilesTapped) h:40];
     UIButton *dumpViewBtn = [self makeBtn:@"Dump view hierarchy" bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
-    [self.debugStack addArrangedSubview:self.manualTidField];
-    [self.debugStack addArrangedSubview:scanBtn];
+    [self.debugStack addArrangedSubview:rescanBtn];
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:findDBBtn];
@@ -335,8 +332,9 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 
     // ---------- assemble ----------
     [stack addArrangedSubview:self.statusLabel];
-    [stack addArrangedSubview:self.chatCard];
-    [stack addArrangedSubview:self.threadListStack];
+    [stack addArrangedSubview:self.searchField];
+    [stack addArrangedSubview:self.selectedLabel];
+    [stack addArrangedSubview:self.peopleScroll];
     [stack addArrangedSubview:s2];
     [stack addArrangedSubview:self.messageStack];
     [stack addArrangedSubview:addBtn];
@@ -348,21 +346,19 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [stack addArrangedSubview:self.debugToggleBtn];
     [stack addArrangedSubview:self.debugStack];
 
-    // keyboard toolbar (Done)
+    // keyboard toolbar
     self.kbToolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
     UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithTitle:@"Done" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
     self.kbToolbar.items = @[flex, done];
 
-    // floating hide-keyboard pill (top-right, visible while keyboard up)
+    // floating hide-keyboard pill
     self.hideKbFloatBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.hideKbFloatBtn setTitle:@"Hide ⌨️" forState:UIControlStateNormal];
+    [self.hideKbFloatBtn setTitle:@"Hide \u2328\uFE0F" forState:UIControlStateNormal];
     self.hideKbFloatBtn.backgroundColor = [UIColor secondarySystemBackgroundColor];
     self.hideKbFloatBtn.layer.cornerRadius = 16;
     self.hideKbFloatBtn.layer.borderWidth = 1;
     self.hideKbFloatBtn.layer.borderColor = [UIColor systemGray3Color].CGColor;
-    self.hideKbFloatBtn.layer.shadowOpacity = 0.2;
-    self.hideKbFloatBtn.layer.shadowRadius = 4;
     self.hideKbFloatBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     self.hideKbFloatBtn.translatesAutoresizingMaskIntoConstraints = NO;
     self.hideKbFloatBtn.hidden = YES;
@@ -393,21 +389,21 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         [stack.widthAnchor constraintEqualToAnchor:scroll.widthAnchor constant:-32],
     ]];
 
-    [self addMessageRowToolbars];
+    [self applyToolbars];
     [self refreshPreview];
 
-    // ---------- dylib ready ----------
+    // ---------- observers ----------
     __weak typeof(self) weakSelf = self;
     [[NSDistributedNotificationCenter defaultCenter]
         addObserverForName:kNotifyReady object:nil queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *note) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 typeof(self) strongSelf = weakSelf;
-                if (!strongSelf) return;
-                NSString *ver = note.userInfo[@"version"] ?: @"?";
-                strongSelf->_dylibReady = YES;
-                strongSelf.statusLabel.text = [NSString stringWithFormat:@"✅ Dylib v%@ running — ready", ver];
-                strongSelf.statusLabel.backgroundColor = [UIColor systemGreenColor];
+                if (!strongSelf || strongSelf->_dbLoaded) return;
+                NSString *ver = note.userInfo[@"version"] ?: @"";
+                strongSelf.statusLabel.text = [NSString stringWithFormat:@"\u2705 Dylib v%@ running \u2014 reading DB...", ver];
+                strongSelf.statusLabel.backgroundColor = [UIColor systemTealColor];
+                [strongSelf rescanTapped];
             });
         }];
 
@@ -420,6 +416,15 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
                 [strongSelf handleResultWithTag:note.userInfo[@"tag"] ?: @"result" text:note.userInfo[@"text"] ?: @""];
             });
         }];
+
+    // AUTO-SCAN: retry every 4s until DB loads
+    [NSTimer scheduledTimerWithTimeInterval:4.0 repeats:YES block:^(NSTimer *timer) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) { [timer invalidate]; return; }
+        if (strongSelf->_dbLoaded) { [timer invalidate]; return; }
+        [[NSDistributedNotificationCenter defaultCenter]
+            postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
+    }];
 }
 
 - (void)dealloc {
@@ -427,11 +432,17 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 }
 
 // ============================================================
-// Results
+// Results routing
 // ============================================================
 - (void)handleResultWithTag:(NSString *)tag text:(NSString *)text {
     _resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
-    if ([tag isEqualToString:@"threadList"]) { [self populateThreadList:text]; return; }
+    if ([tag isEqualToString:@"threadList"]) { [self populatePeople:text]; return; }
+    if ([tag isEqualToString:@"threads"]) {
+        // scan error — show in status
+        self.statusLabel.text = [NSString stringWithFormat:@"\u26A0\uFE0F %@", text.length > 60 ? [text substringToIndex:60] : text];
+        self.statusLabel.backgroundColor = [UIColor systemOrangeColor];
+        return;
+    }
     if ([tag isEqualToString:@"inject"]) { [self showInjectResult:text]; return; }
     if (tag.length > 0 && ![tag isEqualToString:@"result"]) {
         self.resultCard.hidden = NO;
@@ -441,128 +452,90 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     }
 }
 
-- (void)showInjectResult:(NSString *)text {
-    NSRange r = [text rangeOfString:@"@@MIRESULT|"];
-    if (r.location == NSNotFound) {
-        self.resultCard.hidden = NO;
-        self.resultCard.backgroundColor = [UIColor systemRedColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = [text containsString:@"Exception"]
-            ? @"❌ Messenger crashed during inject. Open Messenger — if it stays open, check Advanced → Get crash log."
-            : @"❌ Unexpected result — open Advanced → Copy for details.";
-        return;
-    }
-    NSRange end = [text rangeOfString:@"|@@" options:0 range:NSMakeRange(r.location, text.length - r.location)];
-    if (end.location == NSNotFound) {
-        self.resultCard.hidden = NO;
-        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = @"⚠️ Got a result but couldn't parse it. Check Advanced for the full log.";
-        return;
-    }
-    NSString *line = [text substringWithRange:NSMakeRange(r.location + 11, end.location - r.location - 11)];
-    NSMutableDictionary *kv = [NSMutableDictionary dictionary];
-    for (NSString *part in [line componentsSeparatedByString:@"|"]) {
-        NSArray *kp = [part componentsSeparatedByString:@"="];
-        if (kp.count >= 2) kv[kp[0]] = [[kp subarrayWithRange:NSMakeRange(1, kp.count - 1)] componentsJoinedByString:@"="];
-    }
-    self.resultCard.hidden = NO;
-    BOOL ok = [kv[@"ok"] intValue] == 1;
-    NSString *method = kv[@"method"] ?: @"";
-    NSString *name = kv[@"name"] ?: @"";
-    NSString *n = kv[@"inserted"] ?: @"0";
-    if (!ok) {
-        self.resultCard.backgroundColor = [UIColor systemRedColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        NSString *reason = kv[@"reason"] ?: @"";
-        self.resultLabel.text = [reason containsString:@"entity_id_mismatch"]
-            ? [NSString stringWithFormat:@"🛑 Refused to inject: the resolved chat belongs to a DIFFERENT person (safety gate). Open Advanced → Research thread mapping with your thread ID and send me the output."]
-            : [NSString stringWithFormat:@"❌ Inject failed (%@ errors). Open Advanced for the full log.", kv[@"errors"] ?: @"?"];
-    } else if ([method isEqualToString:@"LAST_RESORT_first_thread"]) {
-        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = [NSString stringWithFormat:@"⚠️ Wrote %@ message(s), but the exact chat was NOT found — they may land in the wrong chat. Tap Advanced → Research and send me the output.", n];
-    } else {
-        self.resultCard.backgroundColor = [UIColor systemGreenColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        NSString *chat = (name.length > 0 && ![name isEqualToString:@"NULL"]) ? [NSString stringWithFormat:@" to “%@”", name] : @"";
-        self.resultLabel.text = [NSString stringWithFormat:@"✅ Wrote %@ message%@.\nNow force-quit Messenger (swipe it away), reopen it, and open the chat to verify.", n, chat];
-    }
-    _injectPending = NO;
-}
-
 // ============================================================
-// Step 1 — chat picker
+// People list
 // ============================================================
-- (void)chatCardTapped { [self threadsTapped]; }
-
-- (void)threadsTapped {
-    [self.view endEditing:YES];
-    [self.threadButtons removeAllObjects];
-    for (UIView *v in self.threadListStack.arrangedSubviews) { [self.threadListStack removeArrangedSubview:v]; [v removeFromSuperview]; }
-    self.threadListStack.hidden = NO;
-    self.chatCardSub.text = @"Scanning...";
-    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
-}
-
-- (void)populateThreadList:(NSString *)jsonStr {
-    for (UIView *v in self.threadListStack.arrangedSubviews) { [self.threadListStack removeArrangedSubview:v]; [v removeFromSuperview]; }
-    [self.threadButtons removeAllObjects];
+- (void)populatePeople:(NSString *)jsonStr {
     NSData *jd = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    NSArray *threads = [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil];
-    if (![threads isKindOfClass:[NSArray class]] || threads.count == 0) {
-        self.chatCardSub.text = @"No chats found — open Messenger, load your chat list, try again.";
-        self.threadListStack.hidden = YES;
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil];
+    if (![arr isKindOfClass:[NSArray class]]) arr = @[];
+    _people = [arr mutableCopy];
+    _dbLoaded = _people.count > 0;
+    if (!_dbLoaded) {
+        self.statusLabel.text = @"\u26A0\uFE0F DB read but no chats found \u2014 open Messenger chats first";
+        self.statusLabel.backgroundColor = [UIColor systemOrangeColor];
         return;
     }
-    for (NSDictionary *t in threads) {
+    self.statusLabel.text = [NSString stringWithFormat:@"\u2705 Database loaded \u2014 %d chats. Search & tap a person.", (int)_people.count];
+    self.statusLabel.backgroundColor = [UIColor systemGreenColor];
+    self.peopleScroll.hidden = NO;
+    [self rebuildPeopleList];
+}
+
+- (NSString *)fold:(NSString *)s {
+    return [s stringByFoldingWithOptions:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch locale:[NSLocale currentLocale]];
+}
+
+- (void)rebuildPeopleList {
+    for (UIView *v in self.peopleListStack.arrangedSubviews) { [self.peopleListStack removeArrangedSubview:v]; [v removeFromSuperview]; }
+    [_personBtns removeAllObjects];
+
+    NSString *q = [self fold:self.searchField.text ?: @""];
+    int shown = 0;
+    for (NSDictionary *t in _people) {
+        NSString *name = t[@"n"] ?: @"";
         NSString *k = t[@"k"] ?: @"";
-        NSString *n = t[@"n"] ?: @"";
-        NSString *p = t[@"p"] ?: @"";
-        if (n.length == 0 || [n isEqualToString:@"NULL"]) n = k;
-        if (p.length > 34) p = [[p substringToIndex:34] stringByAppendingString:@"…"];
+        if (q.length > 0 && [[self fold:name] containsString:q] == NO) continue;
+        if (k.length == 0) continue; // unresolved ID -> not injectable, hide
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        [btn setTitle:[NSString stringWithFormat:@"%@   %@  ·  %@", n, p.length ? p : @"", k] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont systemFontOfSize:13];
-        btn.titleLabel.numberOfLines = 2;
-        btn.titleLabel.textAlignment = NSTextAlignmentLeft;
+        NSString *sub = t[@"p"] ?: @"";
+        [btn setTitle:[NSString stringWithFormat:@"%@   \u00B7   %@", name, sub] forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont systemFontOfSize:14];
+        btn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        btn.titleEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 8);
         btn.backgroundColor = [UIColor secondarySystemBackgroundColor];
         [btn setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
         btn.layer.cornerRadius = 8;
-        btn.contentEdgeInsets = UIEdgeInsetsMake(8, 10, 8, 10);
         btn.translatesAutoresizingMaskIntoConstraints = NO;
-        [btn.heightAnchor constraintEqualToConstant:52].active = YES;
+        [btn.heightAnchor constraintEqualToConstant:44].active = YES;
         btn.accessibilityLabel = k;
-        [btn addTarget:self action:@selector(threadPicked:) forControlEvents:UIControlEventTouchUpInside];
-        [self.threadButtons addObject:btn];
-        [self.threadListStack addArrangedSubview:btn];
+        objc_setAssociatedObject(btn, "name", name, OBJC_ASSOCIATION_COPY);
+        [btn addTarget:self action:@selector(personPicked:) forControlEvents:UIControlEventTouchUpInside];
+        [_personBtns addObject:btn];
+        [self.peopleListStack addArrangedSubview:btn];
+        shown++;
+        if (shown >= 100) break;
     }
-    self.chatCardSub.text = [NSString stringWithFormat:@"✅ Found %d chats — tap the one you want:", (int)threads.count];
+    if (shown == 0) {
+        UILabel *empty = [[UILabel alloc] init];
+        empty.text = q.length > 0 ? @"No match." : @"(no chats with resolved IDs)";
+        empty.font = [UIFont systemFontOfSize:13];
+        empty.textColor = [UIColor tertiaryLabelColor];
+        [self.peopleListStack addArrangedSubview:empty];
+    }
+    // shrink list height when few rows
+    CGFloat h = MIN(220.0, MAX(44.0, shown * 50.0 + 16.0));
+    self.peopleScrollH.constant = h;
 }
 
-- (void)threadPicked:(UIButton *)btn {
-    _selThreadID = btn.accessibilityLabel ?: @"";
-    NSString *full = [btn titleForState:UIControlStateNormal] ?: @"";
-    _selThreadName = [[full componentsSeparatedByString:@"\u00A0\u00A0"] firstObject] ?: _selThreadID;
-    // trim trailing " · id" from name
-    NSRange dot = [_selThreadName rangeOfString:@"  ·  "];
-    if (dot.location != NSNotFound) _selThreadName = [_selThreadName substringToIndex:dot.location];
-    _selThreadName = [_selThreadName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-    for (UIButton *b in self.threadButtons) {
+- (void)searchChanged { [self rebuildPeopleList]; }
+
+- (void)personPicked:(UIButton *)btn {
+    [self.view endEditing:YES];
+    _selID = btn.accessibilityLabel ?: @"";
+    _selName = objc_getAssociatedObject(btn, "name") ?: _selID;
+    for (UIButton *b in _personBtns) {
         b.backgroundColor = [UIColor secondarySystemBackgroundColor];
         [b setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
     }
     btn.backgroundColor = [UIColor systemGreenColor];
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.threadListStack.hidden = YES;
-    self.chatCardTitle.text = @"1.  Pick a chat";
-    self.chatCardSub.text = [NSString stringWithFormat:@"✅ %@   (%@)   — tap to change", _selThreadName, _selThreadID];
-    self.chatCardSub.textColor = [UIColor systemGreenColor];
-    self.manualTidField.text = _selThreadID;
+    self.selectedLabel.text = [NSString stringWithFormat:@"\u2705 %@  (%@)", _selName, _selID];
+    self.selectedLabel.textColor = [UIColor systemGreenColor];
 }
 
 // ============================================================
-// Step 2 — messages + preview
+// Messages + preview
 // ============================================================
 - (void)addMessageRow:(BOOL)isMe {
     MIMessageRow *row = [[MIMessageRow alloc] init];
@@ -573,16 +546,15 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     row.onDelete = ^(MIMessageRow *r) { [weakSelf removeMessageRow:r]; };
     [self.messageRows addObject:row];
     [self.messageStack addArrangedSubview:row];
-    row.textField.inputAccessoryView = self.kbToolbar;
-    row.minAgoField.inputAccessoryView = self.kbToolbar;
+    [self applyToolbars];
 }
 
-- (void)addMessageRowToolbars {
+- (void)applyToolbars {
     for (MIMessageRow *row in self.messageRows) {
         row.textField.inputAccessoryView = self.kbToolbar;
         row.minAgoField.inputAccessoryView = self.kbToolbar;
     }
-    self.manualTidField.inputAccessoryView = self.kbToolbar;
+    self.searchField.inputAccessoryView = self.kbToolbar;
 }
 
 - (void)removeMessageRow:(MIMessageRow *)row {
@@ -600,25 +572,20 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     for (MIMessageRow *row in self.messageRows) {
         NSString *t = [row.textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         if (t.length == 0) continue;
-        if (t.length > 60) t = [[t substringToIndex:60] stringByAppendingString:@"…"];
-        if (row.isMe) { [s appendFormat:@"            %@\n", t]; }
-        else { [s appendFormat:@"%@  (them)\n", t]; }
+        if (t.length > 34) t = [[t substringToIndex:34] stringByAppendingString:@"\u2026"];
+        if (row.isMe) { [s appendFormat:@"%28s\n", t.UTF8String]; }
+        else { [s appendFormat:@"%@\n", t]; }
     }
     self.previewView.text = s.length ? s : @"(type in the boxes above)";
 }
 
 // ============================================================
-// Step 3 — inject
+// Inject
 // ============================================================
 - (void)injectTapped {
     [self.view endEditing:YES];
-    NSString *tid = _selThreadID.length ? _selThreadID : (self.manualTidField.text ?: @"");
-    tid = [tid stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (tid.length == 0) {
-        self.resultCard.hidden = NO;
-        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = @"⬆️ Pick a chat first (Step 1).";
+    if (_selID.length == 0) {
+        [self showErrorCard:@"\u2B06\uFE0F Pick a person first (search & tap above)."];
         return;
     }
     NSMutableArray *messages = [NSMutableArray array];
@@ -632,13 +599,10 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         [messages addObject:@{@"s": row.isMe ? @"me" : @"them", @"t": t, @"m": @(minAgo)}];
     }
     if (messages.count == 0) {
-        self.resultCard.hidden = NO;
-        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
-        self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = @"✍️ Write at least one message (Step 2).";
+        [self showErrorCard:@"\u270D\uFE0F Write at least one message."];
         return;
     }
-    self.statusLabel.text = @"⏳ Injecting...";
+    self.statusLabel.text = @"\u23F3 Injecting...";
     self.statusLabel.backgroundColor = [UIColor systemBlueColor];
     self.resultCard.hidden = YES;
     _injectPending = YES;
@@ -647,14 +611,65 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && strongSelf->_injectPending) {
             strongSelf->_injectPending = NO;
-            strongSelf.statusLabel.text = @"⚠️ No response — is Messenger open with the dylib?";
+            strongSelf.statusLabel.text = @"\u26A0\uFE0F No response \u2014 is Messenger open with the dylib?";
             strongSelf.statusLabel.backgroundColor = [UIColor systemRedColor];
         }
     });
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyInject object:nil
-                    userInfo:@{@"threadId": tid, @"messages": messages}
+                    userInfo:@{@"threadId": _selID, @"messages": messages}
             deliverImmediately:YES];
+}
+
+- (void)showErrorCard:(NSString *)msg {
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor systemOrangeColor];
+    self.resultLabel.textColor = [UIColor whiteColor];
+    self.resultLabel.text = msg;
+}
+
+- (void)showInjectResult:(NSString *)text {
+    NSRange r = [text rangeOfString:@"@@MIRESULT|"];
+    if (r.location == NSNotFound) {
+        [self showErrorCard:@"\u274C Unexpected result \u2014 tap Copy output below result for details."];
+        self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+        self.resultLabel.textColor = [UIColor labelColor];
+        self.resultLabel.text = [NSString stringWithFormat:@"[inject]\n%@", text];
+        return;
+    }
+    NSRange end = [text rangeOfString:@"|@@" options:0 range:NSMakeRange(r.location, text.length - r.location)];
+    if (end.location == NSNotFound) { [self showErrorCard:@"\u26A0\uFE0F Got a result but couldn't parse it."]; return; }
+    NSString *line = [text substringWithRange:NSMakeRange(r.location + 11, end.location - r.location - 11)];
+    NSMutableDictionary *kv = [NSMutableDictionary dictionary];
+    for (NSString *part in [line componentsSeparatedByString:@"|"]) {
+        NSArray *kp = [part componentsSeparatedByString:@"="];
+        if (kp.count >= 2) kv[kp[0]] = [[kp subarrayWithRange:NSMakeRange(1, kp.count - 1)] componentsJoinedByString:@"="];
+    }
+    self.resultCard.hidden = NO;
+    BOOL ok = [kv[@"ok"] intValue] == 1;
+    NSString *method = kv[@"method"] ?: @"";
+    NSString *n = kv[@"inserted"] ?: @"0";
+    if (!ok) {
+        self.resultCard.backgroundColor = [UIColor systemRedColor];
+        self.resultLabel.textColor = [UIColor whiteColor];
+        NSString *reason = kv[@"reason"] ?: @"";
+        if ([reason containsString:@"entity_id_mismatch"]) {
+            self.resultLabel.text = @"\U0001F6D1 Refused: resolved chat belongs to a DIFFERENT person (safety gate). Try Advanced \u2192 Research mapping.";
+        } else if ([reason containsString:@"name_not_found"]) {
+            self.resultLabel.text = @"\U0001F6D1 Couldn't resolve that name to a contact.";
+        } else {
+            self.resultLabel.text = [NSString stringWithFormat:@"\u274C Inject failed (%@ errors). Tap Copy output for details.", kv[@"errors"] ?: @"?"];
+        }
+    } else if ([method containsString:@"LAST_RESORT"]) {
+        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
+        self.resultLabel.textColor = [UIColor whiteColor];
+        self.resultLabel.text = [NSString stringWithFormat:@"\u26A0\uFE0F Wrote %@ message(s), but the exact chat was NOT found \u2014 they may be in the wrong chat.", n];
+    } else {
+        self.resultCard.backgroundColor = [UIColor systemGreenColor];
+        self.resultLabel.textColor = [UIColor whiteColor];
+        self.resultLabel.text = [NSString stringWithFormat:@"\u2705 Wrote %@ message%@ to \"%@\".\nForce-quit Messenger (swipe away), reopen, then check the chat.", n, [n isEqualToString:@"1"] ? @"" : @"s", _selName ?: @""];
+    }
+    _injectPending = NO;
 }
 
 // ============================================================
@@ -662,7 +677,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 // ============================================================
 - (void)toggleDebugTapped {
     self.debugStack.hidden = !self.debugStack.hidden;
-    [self.debugToggleBtn setTitle:self.debugStack.hidden ? @"⚙️  Advanced / debug (thread ID, schema, research...)" : @"✖  Close advanced" forState:UIControlStateNormal];
+    [self.debugToggleBtn setTitle:self.debugStack.hidden ? @"\u2699\uFE0F  Advanced / debug" : @"\u2716  Close advanced" forState:UIControlStateNormal];
 }
 
 - (void)postDebug:(NSString *)notif label:(NSString *)label {
@@ -674,6 +689,13 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [[NSDistributedNotificationCenter defaultCenter] postNotificationName:notif object:nil userInfo:@{} deliverImmediately:YES];
 }
 
+- (void)rescanTapped {
+    _dbLoaded = NO;
+    self.statusLabel.text = @"\u23F3 Re-reading Messenger database...";
+    self.statusLabel.backgroundColor = [UIColor systemTealColor];
+    [[NSDistributedNotificationCenter defaultCenter] postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
+}
+
 - (void)findDBTapped { [self postDebug:kNotifyFindDB label:@"Finding database"]; }
 - (void)dumpSchemaTapped { [self postDebug:kNotifySchema label:@"Dumping schema"]; }
 - (void)dumpSampleTapped { [self postDebug:kNotifySample label:@"Dumping sample data"]; }
@@ -683,13 +705,13 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 
 - (void)researchTapped {
     [self.view endEditing:YES];
-    NSString *tid = [self.manualTidField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *tid = _selID ?: @"";
     self.resultCard.hidden = NO;
     self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
     self.resultLabel.textColor = [UIColor labelColor];
-    self.resultLabel.text = @"🔬 Researching thread mapping (a few seconds)...";
+    self.resultLabel.text = @"\U0001F52C Researching mapping (a few seconds)...";
     [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": tid ?: @"", @"mode": @"map"} deliverImmediately:YES];
+        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": tid, @"mode": @"map"} deliverImmediately:YES];
 }
 
 - (void)researchSqlTapped {
@@ -697,22 +719,24 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultCard.hidden = NO;
     self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
     self.resultLabel.textColor = [UIColor labelColor];
-    self.resultLabel.text = @"📜 Reading app SQL logic (views/triggers)...";
+    self.resultLabel.text = @"\U0001F4DC Reading app SQL logic...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": @"", @"mode": @"sql"} deliverImmediately:YES];
+}
+
+- (void)copyOutputTapped {
+    [UIPasteboard generalPasteboard].string = _resultText;
+    [self.outputCopyBtn setTitle:@"\u2705 Copied!" forState:UIControlStateNormal];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf) [strongSelf.outputCopyBtn setTitle:@"\U0001F4CB  Copy output" forState:UIControlStateNormal];
+    });
 }
 
 // ============================================================
 // Keyboard
 // ============================================================
-- (void)copyTapped {
-    [UIPasteboard generalPasteboard].string = _resultText;
-    [self.outputCopyBtn setTitle:@"\u2705 Copied!" forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self.outputCopyBtn setTitle:@"\U0001F4CB  Copy output" forState:UIControlStateNormal];
-    });
-}
-
 - (void)kbShow:(NSNotification *)n { self.hideKbFloatBtn.hidden = NO; }
 - (void)kbHide:(NSNotification *)n { self.hideKbFloatBtn.hidden = YES; }
 - (void)dismissKeyboard { [self.view endEditing:YES]; }
