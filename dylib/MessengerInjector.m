@@ -928,7 +928,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     @"WHERE m.thread_key = '1002754957' "
                     @"GROUP BY cm.thread_pk ORDER BY n DESC LIMIT 3";
                 sqlite3_stmt *sgt = NULL;
-                if (sqlite3_prepare_v2(db, gtQuery, -1, &sgt, NULL) == SQLITE_OK) {
+                if (sqlite3_prepare_v2(db, gtQuery.UTF8String, -1, &sgt, NULL) == SQLITE_OK) {
                     NSMutableArray *gtr = [NSMutableArray array];
                     while (sqlite3_step(sgt) == SQLITE_ROW) {
                         [gtr addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)",
