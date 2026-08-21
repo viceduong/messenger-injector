@@ -43,6 +43,7 @@ static NSString *const kNotifySample  = @"com.messenger.injector.dumpSample";
 static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
 static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
+static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
@@ -312,6 +313,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UIButton *rescanBtn = [self makeBtn:@"\U0001F504  Re-read database" bg:[UIColor systemTealColor] act:@selector(rescanTapped) h:40];
     UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Research mapping (selected person)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
     UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Research SQL logic" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Sniff snippet sources" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
+    sniffBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *findDBBtn = [self makeBtn:@"Find database file" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
@@ -323,6 +326,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.debugStack addArrangedSubview:rescanBtn];
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
+    [self.debugStack addArrangedSubview:sniffBtn];
     [self.debugStack addArrangedSubview:findDBBtn];
     [self.debugStack addArrangedSubview:schemaBtn];
     [self.debugStack addArrangedSubview:sampleBtn];
@@ -726,6 +730,17 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.text = @"\U0001F4DC Reading app SQL logic...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": @"", @"mode": @"sql"} deliverImmediately:YES];
+}
+
+- (void)sniffTapped {
+    [self.view endEditing:YES];
+    NSString *tid = _selID ?: @"";
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"\U0001F50E Sniffing all snippet sources...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifySniff object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
 
 - (void)copyOutputTapped {
