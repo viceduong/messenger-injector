@@ -227,7 +227,7 @@ static void MI_hFindDB(void);
 static void MI_hSchema(void);
 static void MI_hSample(void);
 static void MI_hThreads(void);
-static void MI_hResearch(NSString *threadId);
+static void MI_hResearch(NSString *threadId, NSString *mode);
 static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_postResult(NSString *tag, NSString *text);
 
@@ -794,12 +794,24 @@ static long long MI_bridgeResolve(sqlite3 *db, NSString *threadKey, long long li
     return bestPk;
 }
 
-static void MI_hResearch(NSString *threadId) {
-    MI_progress([NSString stringWithFormat:@"research: start %@", threadId ?: @"-"]);
+// Normalize a display name for comparison: fold case + strip diacritics.
+// "Trứnh Đừc Linh" -> "trinh duc linh"; "Trinh Duc Linh" -> "trinh duc linh"
+static NSString *MI_normalizeName(NSString *s) {
+    if (s.length == 0) return @"";
+    CFMutableStringRef cf = CFStringCreateMutableCopy(NULL, (CFIndex)s.length);
+    CFStringTransform(cf, NULL, kCFStringTransformToLatin, false);
+    CFStringTransform(cf, NULL, kCFStringTransformStripDiacritics, false);
+    NSString *out = CFBridgingRelease(cf);
+    return [[[out stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]
+             stringByFoldingWithOptions:NSCaseInsensitiveSearch diacriticInsensitive:YES]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+}
+
+static void MI_hResearch(NSString *threadId, NSString *mode) {
+    MI_progress([NSString stringWithFormat:@"research(%@): start %@", mode ?: @"map", threadId ?: @"-"]);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
             NSMutableString *r = [NSMutableString string];
-            [r appendFormat:@"=== THREAD MAPPING RESEARCH (target: %@) ===\n", threadId ?: @"(none)"];
             NSString *dbPath = MI_findDatabase();
             if (!dbPath.length) { MI_postResult(@"research", @"No database found."); return; }
             sqlite3 *db = NULL;
@@ -810,95 +822,103 @@ static void MI_hResearch(NSString *threadId) {
             }
             sqlite3_busy_timeout(db, 5000);
 
-            // 1) total client_threads rows
-            { sqlite3_stmt *s=NULL; int total=0;
-              if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM client_threads", -1, &s, NULL)==SQLITE_OK) { if (sqlite3_step(s)==SQLITE_ROW) total=sqlite3_column_int(s,0); sqlite3_finalize(s); }
-              [r appendFormat:@"client_threads total rows: %d\n", total]; }
-
-            // 2) full client_threads list: pk | name
-            { sqlite3_stmt *s=NULL; int n=0;
-              [r appendString:@"client_threads (pk | name):\n"];
-              if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name FROM client_threads ORDER BY pk LIMIT 200", -1, &s, NULL)==SQLITE_OK) {
-                while (sqlite3_step(s)==SQLITE_ROW && n<200) { [r appendFormat:@"  %lld | %@\n", sqlite3_column_int64(s,0), MI_cstr(sqlite3_column_text(s,1)) ?: @"NULL"]; n++; }
-                sqlite3_finalize(s); } }
-
-            // 3) does target FB ID appear in ANY client_threads column? which row(s)?
-            if (threadId.length > 0) {
-                NSMutableArray *cols=[NSMutableArray array];
-                sqlite3_stmt *ps=NULL;
-                if (sqlite3_prepare_v2(db, "PRAGMA table_info(client_threads)", -1, &ps, NULL)==SQLITE_OK) { while (sqlite3_step(ps)==SQLITE_ROW){ NSString *c=MI_cstr(sqlite3_column_text(ps,1)); if (c.length) [cols addObject:c]; } sqlite3_finalize(ps); }
-                NSMutableArray *hits=[NSMutableArray array];
-                for (NSString *c in cols) {
-                    sqlite3_stmt *hs=NULL;
-                    NSString *hq=[NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE \"%@\" LIKE '%%%@%%' LIMIT 5", c, threadId];
-                    if (sqlite3_prepare_v2(db, hq.UTF8String, -1, &hs, NULL)==SQLITE_OK) {
-                        NSMutableArray *pks=[NSMutableArray array];
-                        while (sqlite3_step(hs)==SQLITE_ROW) [pks addObject:[NSString stringWithFormat:@"%lld", sqlite3_column_int64(hs,0)]];
-                        sqlite3_finalize(hs);
-                        if (pks.count) [hits addObject:[NSString stringWithFormat:@"%@\u2192%@", c, [pks componentsJoinedByString:@","]]];
-                    }
+            if ([mode isEqualToString:@"sql"]) {
+                [r appendString:@"=== SQL LOGIC (app's own views/triggers/indexes) ===\n"];
+                {
+                    sqlite3_stmt *s2=NULL; int n=0;
+                    if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL ORDER BY name", -1, &s2, NULL)==SQLITE_OK){
+                        while(sqlite3_step(s2)==SQLITE_ROW && n<12){ NSString *vs=MI_cstr(sqlite3_column_text(s2,1)) ?: @""; if (vs.length>130) vs=[vs substringToIndex:130]; [r appendFormat:@"[view %@] %@\n", MI_cstr(sqlite3_column_text(s2,0)) ?: @"?", vs]; n++; }
+                        sqlite3_finalize(s2); if(!n) [r appendString:@"(no views)\n"]; }
+                    sqlite3_stmt *st=NULL;
+                    if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name", -1, &st, NULL)==SQLITE_OK){
+                        int n2=0; while(sqlite3_step(st)==SQLITE_ROW && n2<12){ NSString *ts=MI_cstr(sqlite3_column_text(st,1)) ?: @""; if (ts.length>130) ts=[ts substringToIndex:130]; [r appendFormat:@"[trigger %@] %@\n", MI_cstr(sqlite3_column_text(st,0)) ?: @"?", ts]; n2++; }
+                        sqlite3_finalize(st); if(!n2) [r appendString:@"(no triggers)\n"]; }
+                    sqlite3_stmt *si2=NULL;
+                    if (sqlite3_prepare_v2(db, "SELECT tbl_name, name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL AND tbl_name IN ('client_threads','client_messages','client_contacts','messages','threads','contacts') ORDER BY tbl_name LIMIT 25", -1, &si2, NULL)==SQLITE_OK){
+                        int n3=0; while(sqlite3_step(si2)==SQLITE_ROW && n3<25){ [r appendFormat:@"[idx] %@.%@\n", MI_cstr(sqlite3_column_text(si2,0)) ?: @"?", MI_cstr(sqlite3_column_text(si2,1)) ?: @"?"]; n3++; }
+                        sqlite3_finalize(si2); if(!n3) [r appendString:@"(no user indexes)\n"]; }
                 }
-                [r appendFormat:@"target in client_threads: %@\n", (hits.count > 0) ? [hits componentsJoinedByString:@" | "] : @"NO MATCH (no row contains this FB ID)"];
-            }
-
-            // 4) ground truth + target bridge (bounded)
-            { NSString *gt=nil; long long gtpk=MI_bridgeResolve(db, @"1002754957", 200, &gt); BOOL ok=(gtpk==410725001); 
-              [r appendFormat:@"ground truth 1002754957 \u2192 %@ (expect 410725001: %@)\n", gt, (ok) ? @"PASS \u2705" : @"FAIL \u274C"]; }
-            if (threadId.length > 0) { NSString *d=nil; long long pk=MI_bridgeResolve(db, threadId, 200, &d); [r appendFormat:@"target bridge %@ \u2192 %@ (pk=%lld)\n", threadId, d, pk]; }
-
-            // 4b) threads table (sync layer): full column list + full rows for target & ground truth.
-            // Research finding (messagix-js Lightspeed protocol): the app's LS*Thread stored
-            // procedures take BOTH threadKey and clientThreadKey — the `threads` table likely
-            // holds the mapping FB thread_key -> client layer key.
-            {
-                sqlite3_stmt *pi=NULL; NSMutableArray *tcols=[NSMutableArray array];
-                if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL)==SQLITE_OK) { while (sqlite3_step(pi)==SQLITE_ROW) { NSString *c=MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [tcols addObject:c]; } sqlite3_finalize(pi); }
-                [r appendFormat:@"threads columns: %@\n", [tcols componentsJoinedByString:@", "]];
-                if (tcols.count > 0) {
-                    sqlite3_stmt *tr=NULL;
-                    NSString *tq=[NSString stringWithFormat:@"SELECT * FROM threads WHERE thread_key IN ('%@','1002754957') LIMIT 2", threadId];
-                    if (sqlite3_prepare_v2(db, tq.UTF8String, -1, &tr, NULL)==SQLITE_OK) {
-                        int nrows=0;
-                        while (sqlite3_step(tr)==SQLITE_ROW && nrows<2) {
-                            nrows++;
-                            [r appendString:@"threads row:\n"];
-                            int cc=sqlite3_column_count(tr);
-                            for (int c=0;c<cc;c++) { [r appendFormat:@"  %@ = %@\n", tcols[c], MI_cstr(sqlite3_column_text(tr,c)) ?: @"NULL"]; }
+            } else {
+                [r appendFormat:@"=== MAPPING RESEARCH (target: %@) ===\n", threadId ?: @"(none)"];
+                {
+                    sqlite3_stmt *s2=NULL; int total=0;
+                    if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name FROM client_threads ORDER BY pk LIMIT 200", -1, &s2, NULL)==SQLITE_OK) {
+                        while (sqlite3_step(s2)==SQLITE_ROW) { [r appendFormat:@"%lld | %@\n", sqlite3_column_int64(s2,0), MI_cstr(sqlite3_column_text(s2,1)) ?: @"NULL"]; total++; }
+                        sqlite3_finalize(s2);
+                    }
+                    [r appendFormat:@"(client_threads rows: %d)\n", total];
+                }
+                if (threadId.length > 0) {
+                    NSMutableArray *cols=[NSMutableArray array];
+                    sqlite3_stmt *ps=NULL;
+                    if (sqlite3_prepare_v2(db, "PRAGMA table_info(client_threads)", -1, &ps, NULL)==SQLITE_OK) { while (sqlite3_step(ps)==SQLITE_ROW){ NSString *c=MI_cstr(sqlite3_column_text(ps,1)); if (c.length) [cols addObject:c]; } sqlite3_finalize(ps); }
+                    NSMutableArray *conds=[NSMutableArray array];
+                    for (NSString *c in cols) [conds addObject:[NSString stringWithFormat:@"\"%@\" LIKE '%%%@%%'", c, threadId]];
+                    sqlite3_stmt *hs=NULL; NSMutableArray *pks=[NSMutableArray array];
+                    if (conds.count>0) {
+                        NSString *hq=[NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE %@ LIMIT 5", [conds componentsJoinedByString:@" OR "]];
+                        if (sqlite3_prepare_v2(db, hq.UTF8String, -1, &hs, NULL)==SQLITE_OK) { while (sqlite3_step(hs)==SQLITE_ROW) [pks addObject:[NSString stringWithFormat:@"%lld", sqlite3_column_int64(hs,0)]]; sqlite3_finalize(hs); }
+                    }
+                    [r appendFormat:@"row_scan(target): %@\n", pks.count?[pks componentsJoinedByString:@","]:(@"NO MATCH")];
+                }
+                {
+                    NSMutableArray *det=[NSMutableArray array]; sqlite3_stmt *s2=NULL;
+                    NSString *q=@"SELECT thread_pk, COUNT(*) c FROM client_messages WHERE sender_contact_pk = 1002754957 GROUP BY thread_pk ORDER BY c DESC LIMIT 3";
+                    if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s2, NULL)==SQLITE_OK){ while (sqlite3_step(s2)==SQLITE_ROW) [det addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", sqlite3_column_int64(s2,0), sqlite3_column_int64(s2,1)]]; sqlite3_finalize(s2); }
+                    [r appendFormat:@"sender GT 1002754957: %@ (expect pk=410725001)\n", det.count?[det componentsJoinedByString:@","]:(@"none")];
+                }
+                if (threadId.length > 0) {
+                    NSMutableArray *det=[NSMutableArray array]; sqlite3_stmt *s2=NULL;
+                    NSString *q=[NSString stringWithFormat:@"SELECT thread_pk, COUNT(*) c FROM client_messages WHERE sender_contact_pk = %lld GROUP BY thread_pk ORDER BY c DESC LIMIT 3", threadId.longLongValue];
+                    if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s2, NULL)==SQLITE_OK){ while (sqlite3_step(s2)==SQLITE_ROW) [det addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", sqlite3_column_int64(s2,0), sqlite3_column_int64(s2,1)]]; sqlite3_finalize(s2); }
+                    [r appendFormat:@"sender target: %@\n", det.count?[det componentsJoinedByString:@","]:(@"none")];
+                }
+                if (threadId.length > 0) {
+                    NSString *nm=@"NOT FOUND";
+                    sqlite3_stmt *s2=NULL;
+                    if (sqlite3_prepare_v2(db, [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id='%@'", MI_esc(threadId)].UTF8String, -1, &s2, NULL)==SQLITE_OK){ if (sqlite3_step(s2)==SQLITE_ROW) nm=MI_cstr(sqlite3_column_text(s2,0)) ?: @"NULL"; sqlite3_finalize(s2); }
+                    [r appendFormat:@"sync contact name: %@\n", nm];
+                    sqlite3_stmt *s3=NULL; int cc=0;
+                    NSString *q2=[NSString stringWithFormat:@"SELECT pk, contact_id, displayed_name FROM client_contacts WHERE contact_id='%@' LIMIT 3", MI_esc(threadId)];
+                    if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s3, NULL)==SQLITE_OK){ while(sqlite3_step(s3)==SQLITE_ROW && cc<3){ [r appendFormat:@"client_contact: pk=%lld id=%@ name=%@\n", sqlite3_column_int64(s3,0), MI_cstr(sqlite3_column_text(s3,1)) ?: @"NULL", MI_cstr(sqlite3_column_text(s3,2)) ?: @"NULL"]; cc++; } sqlite3_finalize(s3); if(!cc) [r appendString:@"client_contact: NOT FOUND\n"]; }
+                }
+                if (threadId.length > 0) {
+                    NSMutableArray *names=[NSMutableArray array];
+                    sqlite3_stmt *sn=NULL;
+                    NSString *qn=[NSString stringWithFormat:@"SELECT name FROM contacts WHERE id='%@' LIMIT 1", MI_esc(threadId)];
+                    if (sqlite3_prepare_v2(db, qn.UTF8String, -1, &sn, NULL)==SQLITE_OK){ if (sqlite3_step(sn)==SQLITE_ROW) { NSString *nm=MI_cstr(sqlite3_column_text(sn,0)); if (nm.length) [names addObject:nm]; } sqlite3_finalize(sn); }
+                    sqlite3_stmt *sn2=NULL;
+                    NSString *qn2=[NSString stringWithFormat:@"SELECT displayed_name FROM client_contacts WHERE contact_id='%@' LIMIT 1", MI_esc(threadId)];
+                    if (sqlite3_prepare_v2(db, qn2.UTF8String, -1, &sn2, NULL)==SQLITE_OK){ if (sqlite3_step(sn2)==SQLITE_ROW) { NSString *nm=MI_cstr(sqlite3_column_text(sn2,0)); if (nm.length) [names addObject:nm]; } sqlite3_finalize(sn2); }
+                    NSString *result=@"no name found";
+                    for (NSString *nm in names) {
+                        NSString *want=MI_normalizeName(nm);
+                        if (want.length<3) continue;
+                        sqlite3_stmt *sa=NULL; NSMutableArray *hits=[NSMutableArray array];
+                        if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name FROM client_threads LIMIT 500", -1, &sa, NULL)==SQLITE_OK) {
+                            while (sqlite3_step(sa)==SQLITE_ROW) {
+                                NSString *n1=MI_cstr(sqlite3_column_text(sa,1));
+                                if (n1.length>0 && [MI_normalizeName(n1) isEqualToString:want]) [hits addObject:[NSString stringWithFormat:@"pk=%lld(%@)", sqlite3_column_int64(sa,0), n1]];
+                            }
+                            sqlite3_finalize(sa);
                         }
-                        sqlite3_finalize(tr);
-                        if (!nrows) [r appendString:@"threads: no rows for target/ground-truth\n"];
+                        if (hits.count>0) { result=[NSString stringWithFormat:@"%@ -> %@", nm, [hits componentsJoinedByString:@","]]; break; }
                     }
+                    [r appendFormat:@"name-match dry run: %@\n", result];
+                }
+                {
+                    int c1=0,c2=0,c3=0;
+                    sqlite3_stmt *s2=NULL;
+                    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages WHERE thread_key='1002754957'", -1, &s2, NULL)==SQLITE_OK){ if(sqlite3_step(s2)==SQLITE_ROW) c1=sqlite3_column_int(s2,0); sqlite3_finalize(s2); }
+                    if (threadId.length>0) {
+                        s2=NULL;
+                        NSString *q=[NSString stringWithFormat:@"SELECT COUNT(*) FROM messages WHERE thread_key='%@'", MI_esc(threadId)];
+                        if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s2, NULL)==SQLITE_OK){ if(sqlite3_step(s2)==SQLITE_ROW) c2=sqlite3_column_int(s2,0); sqlite3_finalize(s2); }
+                    }
+                    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM client_messages WHERE thread_pk=410725001", -1, &s2, NULL)==SQLITE_OK){ if(sqlite3_step(s2)==SQLITE_ROW) c3=sqlite3_column_int(s2,0); sqlite3_finalize(s2); }
+                    [r appendFormat:@"counts: msgs(GT)=%d msgs(target)=%d client_msgs(GT pk)=%d\n", c1, c2, c3];
                 }
             }
-
-            // 5) sender_contact_pk match (other person's real messages in their 1-on-1 thread)
-            if (threadId.length > 0) {
-                sqlite3_stmt *s=NULL; NSMutableArray *det=[NSMutableArray array];
-                NSString *q=[NSString stringWithFormat:@"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 5", threadId.longLongValue];
-                if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL)==SQLITE_OK) { while (sqlite3_step(s)==SQLITE_ROW) [det addObject:[NSString stringWithFormat:@"pk=%lld", sqlite3_column_int64(s,0)]]; sqlite3_finalize(s); }
-                [r appendFormat:@"sender_contact_pk match: %@\n", (det.count > 0) ? [det componentsJoinedByString:@", "] : @"none"];
-            }
-
-            // 6) contact names for the target
-            if (threadId.length > 0) {
-                sqlite3_stmt *s=NULL; NSString *nm=@"NOT FOUND";
-                if (sqlite3_prepare_v2(db, [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id='%@'", MI_esc(threadId)].UTF8String, -1, &s, NULL)==SQLITE_OK){ if (sqlite3_step(s)==SQLITE_ROW) nm=MI_cstr(sqlite3_column_text(s,0)) ?: @"NULL"; sqlite3_finalize(s); }
-                [r appendFormat:@"contact (sync) name: %@\n", nm];
-                sqlite3_stmt *s2=NULL; int cc=0;
-                NSString *q2=[NSString stringWithFormat:@"SELECT pk, contact_id, displayed_name FROM client_contacts WHERE contact_id='%@' OR pk=%@ LIMIT 3", MI_esc(threadId), threadId];
-                if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s2, NULL)==SQLITE_OK){ while(sqlite3_step(s2)==SQLITE_ROW && cc<3){ [r appendFormat:@"client_contact: pk=%lld id=%@ name=%@\n", sqlite3_column_int64(s2,0), MI_cstr(sqlite3_column_text(s2,1)) ?: @"NULL", MI_cstr(sqlite3_column_text(s2,2)) ?: @"NULL"]; cc++; } sqlite3_finalize(s2); if(!cc) [r appendString:@"client_contact: NOT FOUND\n"]; }
-            }
-
-            // 7) indexes on the client layer
-            { sqlite3_stmt *s=NULL; [r appendString:@"indexes (client layer):\n"];
-              if (sqlite3_prepare_v2(db, "SELECT tbl_name, name FROM sqlite_master WHERE type='index' AND (tbl_name LIKE 'client%' OR tbl_name='messages') AND sql IS NOT NULL ORDER BY tbl_name LIMIT 40", -1, &s, NULL)==SQLITE_OK){ int n=0; while(sqlite3_step(s)==SQLITE_ROW && n<40){ [r appendFormat:@"  %@.%@\n", MI_cstr(sqlite3_column_text(s,0)) ?: @"?", MI_cstr(sqlite3_column_text(s,1)) ?: @"?"]; n++; } sqlite3_finalize(s); if (n==0) [r appendString:@"  (none)\n"]; } }
-
-            // 8) views + triggers SQL (the app's own join logic)
-            { sqlite3_stmt *s=NULL;
-              if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL ORDER BY name", -1, &s, NULL)==SQLITE_OK){ int n=0; while(sqlite3_step(s)==SQLITE_ROW && n<30){ NSString *vs=MI_cstr(sqlite3_column_text(s,1)) ?: @""; if (vs.length>300) vs=[vs substringToIndex:300]; [r appendFormat:@"[view %@] %@\n", MI_cstr(sqlite3_column_text(s,0)) ?: @"?", vs]; n++; } sqlite3_finalize(s); if(!n) [r appendString:@"(no views)\n"]; }
-              sqlite3_stmt *st=NULL;
-              if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name", -1, &st, NULL)==SQLITE_OK){ int n=0; while(sqlite3_step(st)==SQLITE_ROW && n<30){ NSString *ts=MI_cstr(sqlite3_column_text(st,1)) ?: @""; if (ts.length>300) ts=[ts substringToIndex:300]; [r appendFormat:@"[trigger %@] %@\n", MI_cstr(sqlite3_column_text(st,0)) ?: @"?", ts]; n++; } sqlite3_finalize(st); if(!n) [r appendString:@"(no triggers)\n"]; } }
-
             sqlite3_close(db);
             MI_postResult(@"research", r);
         } @catch (NSException *e) {
@@ -1094,55 +1114,9 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
 
             long long threadPk = 0;
             NSString *pkMethod = @"none";
-            BOOL gtPass = NO; // ground-truth validation result
             {
-                // --- Method 0 (PRIMARY candidate): threads.client_thread_key
-                // Research finding (messagix-js Lightspeed protocol): the app's
-                // LS*Thread stored procedures take both threadKey AND clientThreadKey —
-                // the sync-layer `threads` table likely maps FB thread_key -> client pk.
-                sqlite3_stmt *s0 = NULL;
-                int hasCTK = 0;
-                { sqlite3_stmt *pi=NULL;
-                  if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL)==SQLITE_OK) {
-                    while (sqlite3_step(pi)==SQLITE_ROW) { NSString *c=MI_cstr(sqlite3_column_text(pi,1)); if ([c isEqualToString:@"client_thread_key"]) hasCTK=1; }
-                    sqlite3_finalize(pi); }
-                }
-                [report appendFormat:@"[research] threads table has client_thread_key column: %@\n", hasCTK ? @"YES" : @"NO"];
-                if (hasCTK) {
-                    // ground truth first
-                    NSString *gtq = @"SELECT client_thread_key FROM threads WHERE thread_key = '1002754957' LIMIT 1";
-                    sqlite3_stmt *s0g = NULL; long long gtCtk = 0;
-                    if (sqlite3_prepare_v2(db, gtq.UTF8String, -1, &s0g, NULL)==SQLITE_OK) { if (sqlite3_step(s0g)==SQLITE_ROW) gtCtk = sqlite3_column_int64(s0g,0); sqlite3_finalize(s0g); }
-                    [report appendFormat:@"[research] ground truth threads.client_thread_key(1002754957) = %lld (expect 410725001: %@)\n", gtCtk, (gtCtk==410725001)?@"PASS \u2705":@"FAIL \u274C"];
-                    gtPass = (gtCtk == 410725001);
-                    // target
-                    NSString *q0 = [NSString stringWithFormat:@"SELECT client_thread_key FROM threads WHERE thread_key = '%@' LIMIT 1", MI_esc(threadId)];
-                    if (sqlite3_prepare_v2(db, q0.UTF8String, -1, &s0, NULL)==SQLITE_OK) {
-                        if (sqlite3_step(s0)==SQLITE_ROW) {
-                            long long ctk = sqlite3_column_int64(s0,0);
-                            if (ctk > 0) { threadPk = ctk; pkMethod = @"client_thread_key"; }
-                            [report appendFormat:@"[research] threads.client_thread_key(target) = %lld\n", ctk];
-                        } else { [report appendString:@"[research] threads: no row for target thread_key\n"]; }
-                        sqlite3_finalize(s0);
-                    }
-                }
-
-                // --- Ground truth (BOUNDED, fast): em kè thread = pk 410725001, other party = 1002754957.
-                // If the bridge returns 410725001 for 1002754957 → method is PROVEN on clean data.
-                NSString *gtDetail = nil;
-                long long gtPk = MI_bridgeResolve(db, @"1002754957", 200, &gtDetail);
-                gtPass = (gtPk == 410725001);
-                [report appendFormat:@"[research] ground truth 1002754957 → %@ (expect pk=410725001: %@)\n",
-                    gtDetail, gtPass ? @"PASS ✅" : @"FAIL ❌"];
-
-                // --- Method 1: bounded offline_threading_id bridge (≤200 ids, single IN lookup)
-                NSString *jbDetail = nil;
-                long long jbPk = MI_bridgeResolve(db, threadId, 200, &jbDetail);
-                if (jbPk > 0) { threadPk = jbPk; pkMethod = @"bridge_bounded"; }
-                [report appendFormat:@"[research] bridge %@ → %@\n", threadId, jbDetail];
-
-                // --- Method 2: FB ID anywhere in client_threads row
-                if (threadPk == 0) {
+                // --- Method 1: FB ID anywhere in a client_threads row (entity_id URLs etc.)
+                {
                     NSMutableArray *cols = [NSMutableArray array];
                     sqlite3_stmt *ps = NULL;
                     if (sqlite3_prepare_v2(db, "PRAGMA table_info(client_threads)", -1, &ps, NULL) == SQLITE_OK) {
@@ -1157,51 +1131,87 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                         for (NSString *c in cols) {
                             [conds addObject:[NSString stringWithFormat:@"\"%@\" LIKE '%%%@%%'", c, threadId]];
                         }
-                        NSString *q2 = [NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE %@ LIMIT 1",
+                        NSString *q2 = [NSString stringWithFormat:@"SELECT pk, default_thread_name FROM client_threads WHERE %@ LIMIT 1",
                                        [conds componentsJoinedByString:@" OR "]];
                         sqlite3_stmt *s2 = NULL;
                         if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s2, NULL) == SQLITE_OK) {
                             if (sqlite3_step(s2) == SQLITE_ROW) {
                                 threadPk = sqlite3_column_int64(s2, 0);
                                 pkMethod = @"row_scan";
+                                [report appendFormat:@"[research] row_scan hit: pk=%lld name=%@
+", threadPk, MI_cstr(sqlite3_column_text(s2,1))];
                             }
                             sqlite3_finalize(s2);
                         }
                     }
                 }
 
-                // --- Method 3: name mapping (contacts.name → thread display name)
+                // --- Method 2: sender_contact_pk — threads where target actually sent messages
                 if (threadPk == 0) {
-                    NSString *q3 = [NSString stringWithFormat:
-                        @"SELECT ct.pk, ct.default_thread_name FROM client_threads ct "
-                        @"WHERE ct.default_thread_name IN (SELECT name FROM contacts WHERE id = '%@') "
-                        @"OR ct.default_thread_name IN (SELECT displayed_name FROM client_contacts WHERE contact_id = '%@') "
-                        @"OR ct.default_thread_name_without_nickname IN (SELECT name FROM contacts WHERE id = '%@') "
-                        @"OR ct.default_thread_name_without_nickname IN (SELECT displayed_name FROM client_contacts WHERE contact_id = '%@') "
-                        @"LIMIT 5", threadId, threadId, threadId, threadId];
-                    sqlite3_stmt *s3 = NULL;
-                    if (sqlite3_prepare_v2(db, q3.UTF8String, -1, &s3, NULL) == SQLITE_OK) {
+                    sqlite3_stmt *s2b = NULL;
+                    NSString *q2b = [NSString stringWithFormat:
+                        @"SELECT thread_pk, COUNT(*) c FROM client_messages WHERE sender_contact_pk = %lld GROUP BY thread_pk ORDER BY c DESC LIMIT 5",
+                        threadId.longLongValue];
+                    if (sqlite3_prepare_v2(db, q2b.UTF8String, -1, &s2b, NULL) == SQLITE_OK) {
                         NSMutableArray *cands = [NSMutableArray array];
-                        while (sqlite3_step(s3) == SQLITE_ROW) {
-                            [cands addObject:[NSString stringWithFormat:@"%lld:%@", sqlite3_column_int64(s3, 0), MI_cstr(sqlite3_column_text(s3, 1)) ?: @"?"]];
-                            if (threadPk == 0) { threadPk = sqlite3_column_int64(s3, 0); pkMethod = @"name_match"; }
+                        while (sqlite3_step(s2b) == SQLITE_ROW) {
+                            [cands addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", sqlite3_column_int64(s2b,0), sqlite3_column_int64(s2b,1)]];
+                            if (threadPk == 0) { threadPk = sqlite3_column_int64(s2b, 0); pkMethod = @"sender_contact_pk"; }
                         }
-                        sqlite3_finalize(s3);
-                        if (cands.count > 0) [report appendFormat:@"[research] name candidates: %@\n", [cands componentsJoinedByString:@", "]];
+                        sqlite3_finalize(s2b);
+                        [report appendFormat:@"[research] sender_contact_pk: %@
+", cands.count ? [cands componentsJoinedByString:@", "] : @"none"];
                     }
                 }
 
-                // --- Contact name diagnostics (small, safe)
-                {
-                    sqlite3_stmt *sd = NULL;
-                    NSString *qd = [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id = '%@'", MI_esc(threadId)];
-                    if (sqlite3_prepare_v2(db, qd.UTF8String, -1, &sd, NULL) == SQLITE_OK) {
-                        if (sqlite3_step(sd) == SQLITE_ROW) {
-                            [report appendFormat:@"contact name (sync): %@\n", MI_cstr(sqlite3_column_text(sd, 0))];
-                        } else {
-                            [report appendString:@"contact name (sync): NOT FOUND\n"];
+                // --- Method 3: robust name match (exact -> case/diacritic-insensitive)
+                // User-confirmed ground truth: 1455922134493907 = "Trinh Duc Linh" -> pk 410725020
+                if (threadPk == 0) {
+                    NSMutableArray *names = [NSMutableArray array];
+                    {
+                        sqlite3_stmt *sn = NULL;
+                        NSString *qn = [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id = '%@' LIMIT 1", MI_esc(threadId)];
+                        if (sqlite3_prepare_v2(db, qn.UTF8String, -1, &sn, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(sn) == SQLITE_ROW) { NSString *nm = MI_cstr(sqlite3_column_text(sn,0)); if (nm.length > 0) [names addObject:nm]; }
+                            sqlite3_finalize(sn);
                         }
-                        sqlite3_finalize(sd);
+                        sqlite3_stmt *sn2 = NULL;
+                        NSString *qn2 = [NSString stringWithFormat:@"SELECT displayed_name FROM client_contacts WHERE contact_id = '%@' LIMIT 1", MI_esc(threadId)];
+                        if (sqlite3_prepare_v2(db, qn2.UTF8String, -1, &sn2, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(sn2) == SQLITE_ROW) { NSString *nm = MI_cstr(sqlite3_column_text(sn2,0)); if (nm.length > 0) [names addObject:nm]; }
+                            sqlite3_finalize(sn2);
+                        }
+                    }
+                    [report appendFormat:@"[research] names for target: %@
+", names.count ? [names componentsJoinedByString:@", "] : @"NONE"];
+                    for (NSString *nm in names) {
+                        if (threadPk != 0) break;
+                        sqlite3_stmt *se = NULL;
+                        NSString *qe = [NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE default_thread_name = '%@' OR default_thread_name_without_nickname = '%@' LIMIT 1", MI_esc(nm), MI_esc(nm)];
+                        if (sqlite3_prepare_v2(db, qe.UTF8String, -1, &se, NULL) == SQLITE_OK) {
+                            if (sqlite3_step(se) == SQLITE_ROW) { threadPk = sqlite3_column_int64(se,0); pkMethod = @"name_exact"; }
+                            sqlite3_finalize(se);
+                        }
+                        if (threadPk == 0) {
+                            NSString *want = MI_normalizeName(nm);
+                            if (want.length >= 3) {
+                                sqlite3_stmt *sa = NULL;
+                                if (sqlite3_prepare_v2(db, "SELECT pk, default_thread_name, default_thread_name_without_nickname FROM client_threads LIMIT 500", -1, &sa, NULL) == SQLITE_OK) {
+                                    NSMutableArray *near = [NSMutableArray array];
+                                    while (sqlite3_step(sa) == SQLITE_ROW) {
+                                        NSString *n1 = MI_cstr(sqlite3_column_text(sa,1));
+                                        NSString *n2 = MI_cstr(sqlite3_column_text(sa,2));
+                                        NSString *hit = nil;
+                                        if (n1.length > 0 && [MI_normalizeName(n1) isEqualToString:want]) hit = n1;
+                                        else if (n2.length > 0 && [MI_normalizeName(n2) isEqualToString:want]) hit = n2;
+                                        if (hit.length > 0) { threadPk = sqlite3_column_int64(sa,0); pkMethod = @"name_normalized"; [near addObject:hit]; }
+                                    }
+                                    sqlite3_finalize(sa);
+                                    if (near.count > 0) [report appendFormat:@"[research] normalized name hits: %@
+", [near componentsJoinedByString:@", "]];
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1929,7 +1939,7 @@ static void MI_ctor(void) {
         [dnc addObserverForName:kNotifyThreads object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hThreads(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"threads: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyResearch object:nil queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification *n) { @try { MI_hResearch(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"research: %@", e.name]); } }];
+            usingBlock:^(NSNotification *n) { @try { MI_hResearch(n.userInfo[@"threadId"] ?: @"", n.userInfo[@"mode"] ?: @"map"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"research: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) {
                 @try {

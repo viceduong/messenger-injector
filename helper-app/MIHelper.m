@@ -314,6 +314,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 
     UIButton *scanBtn = [self makeBtn:@"Scan chats (list IDs)" bg:[UIColor secondarySystemBackgroundColor] act:@selector(threadsTapped) h:40];
     UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Research thread mapping (uses ID above)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
+    UIButton *sqlBtn = [self makeBtn:@"📜  Research SQL logic" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *findDBBtn = [self makeBtn:@"Find database file" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
     UIButton *schemaBtn = [self makeBtn:@"Dump DB schema" bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
     UIButton *sampleBtn = [self makeBtn:@"Dump sample data" bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
@@ -323,6 +325,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.debugStack addArrangedSubview:self.manualTidField];
     [self.debugStack addArrangedSubview:scanBtn];
     [self.debugStack addArrangedSubview:researchBtn];
+    [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:findDBBtn];
     [self.debugStack addArrangedSubview:schemaBtn];
     [self.debugStack addArrangedSubview:sampleBtn];
@@ -686,7 +689,18 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.textColor = [UIColor labelColor];
     self.resultLabel.text = @"🔬 Researching thread mapping (a few seconds)...";
     [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": tid ?: @""} deliverImmediately:YES];
+        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": tid ?: @"", @"mode": @"map"} deliverImmediately:YES];
+}
+
+- (void)researchSqlTapped {
+    [self.view endEditing:YES];
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"📜 Reading app SQL logic (views/triggers)...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": @"", @"mode": @"sql"} deliverImmediately:YES];
+}
 }
 
 // ============================================================
