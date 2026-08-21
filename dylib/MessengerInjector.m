@@ -70,6 +70,7 @@ static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
 static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
+static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 
 static NSString *const kKeyMessage   = @"message";
 static NSString *const kKeyThreadID = @"threadId";
@@ -231,6 +232,7 @@ static void MI_hThreads(void);
 static void MI_hResearch(NSString *threadId, NSString *mode);
 static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_hSniff(NSString *threadId);
+static void MI_hDeepScan(NSString *needle);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
 static void MI_postResult(NSString *tag, NSString *text);
 
@@ -1239,6 +1241,113 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
             }
         }
     }
+}
+
+// ============================================================
+// Deep storage scan: search EVERY SQLite file in every Messenger
+// container for a given text fragment -> finds which file/table
+// actually stores the rendered inbox preview.
+// ============================================================
+static volatile int MI_ds_files = 0, MI_ds_matches = 0;
+
+static void MI_deepScanFile(NSString *path, NSString *needle, NSMutableString *r) {
+    if (MI_ds_matches >= 25) return;
+    // must be SQLite
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!fh) return;
+    NSData *hdr = [fh readDataOfLength:16];
+    [fh closeFile];
+    if (hdr.length < 16 || strncmp(hdr.bytes, "SQLite format 3", 15) != 0) return;
+
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(path.UTF8String, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return;
+    }
+    sqlite3_busy_timeout(db, 800);
+    MI_ds_files++;
+
+    NSMutableArray *tables = [NSMutableArray array];
+    sqlite3_stmt *ts = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", -1, &ts, NULL) == SQLITE_OK) {
+        while (sqlite3_step(ts) == SQLITE_ROW) { NSString *n = MI_cstr(sqlite3_column_text(ts,0)); if (n.length) [tables addObject:n]; }
+        sqlite3_finalize(ts);
+    }
+    for (NSString *tbl in tables) {
+        if (MI_ds_matches >= 25) break;
+        sqlite3_stmt *pi = NULL;
+        NSMutableArray *cols = [NSMutableArray array]; // [name]
+        NSString *q = [NSString stringWithFormat:@"PRAGMA table_info(%@)", tbl];
+        if (sqlite3_prepare_v2(db, q.UTF8String, -1, &pi, NULL) == SQLITE_OK) {
+            while (sqlite3_step(pi) == SQLITE_ROW) {
+                int ctype = sqlite3_column_int(pi, 2);
+                NSString *cn = MI_cstr(sqlite3_column_text(pi,1));
+                if (cn.length && (ctype == SQLITE_TEXT || ctype == 0)) [cols addObject:cn];
+            }
+            sqlite3_finalize(pi);
+        }
+        for (NSString *col in cols) {
+            if (MI_ds_matches >= 25) break;
+            sqlite3_stmt *rs = NULL;
+            NSString *rq = [NSString stringWithFormat:@"SELECT rowid FROM \"%@\" WHERE \"%@\" LIKE ? LIMIT 2", tbl, col];
+            if (sqlite3_prepare_v2(db, rq.UTF8String, -1, &rs, NULL) != SQLITE_OK) continue;
+            NSString *pat = [NSString stringWithFormat:@"%%%@%%", needle];
+            sqlite3_bind_text(rs, 1, pat.UTF8String, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(rs) == SQLITE_ROW) {
+                MI_ds_matches++;
+                NSString *base = path.lastPathComponent ?: path;
+                [r appendFormat:@"HIT %@.%@.%@ rowid=%lld\n", base, tbl, col, sqlite3_column_int64(rs,0)];
+            }
+            sqlite3_finalize(rs);
+        }
+    }
+    sqlite3_close(db);
+}
+
+static void MI_hDeepScan(NSString *needle) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSMutableString *r = [NSMutableString string];
+            [r appendFormat:@"=== DEEP SCAN '%@' ===\n", needle];
+
+            // same roots MI_findDatabase uses
+            NSFileManager *fm = [NSFileManager defaultManager];
+            NSMutableArray *roots = [NSMutableArray array];
+            NSArray *appGroups = [fm contentsOfDirectoryAtPath:@"/private/var/mobile/Containers/Shared/AppGroup" error:nil] ?: @[];
+            for (NSString *g in appGroups) {
+                [roots addObject:[NSString stringWithFormat:@"/private/var/mobile/Containers/Shared/AppGroup/%@", g]];
+            }
+            [roots addObject:@"/private/var/mobile/Containers/Data/Application"];
+
+            NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-90*24*3600];
+            for (NSString *root in roots) {
+                NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root]
+                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLContentModificationDateKey]
+                                                        options:NSDirectoryEnumerationSkipsPackageDescendants
+                                                   errorHandler:nil];
+                for (NSURL *u in en) {
+                    if (MI_ds_matches >= 25) break;
+                    NSNumber *isReg = nil; NSDate *mod = nil;
+                    [u getResourceValue:&isReg forKey:NSURLIsRegularFileKey error:nil];
+                    [u getResourceValue:&mod forKey:NSURLContentModificationDateKey error:nil];
+                    if (![isReg boolValue]) continue;
+                    if (mod && [mod compare:cutoff] == NSOrderedAscending) continue;
+                    NSString *ext = u.pathExtension.lowercaseString;
+                    NSSet *okExt = [NSSet setWithArray:@[@"db", @"sqlite", @"sqlite3", @"store", @""]];
+                    if (![okExt containsObject:ext]) continue;
+                    NSDictionary *sz = [u resourceValuesForKeys:@[NSFileSize] error:nil];
+                    unsigned long long fsz = [sz[NSFileSize] unsignedLongLongValue];
+                    if (fsz == 0 || fsz > 300*1024*1024) continue;
+                    MI_deepScanFile(u.path, needle, r);
+                }
+                if (MI_ds_matches >= 25) break;
+            }
+            [r appendFormat:@"scanned=%d files hits=%d\n", MI_ds_files, MI_ds_matches];
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
+        } @catch (NSException *e) {
+            MI_postResult(@"progress", [NSString stringWithFormat:@"deepscan exception: %@", e.reason]);
+        }
+    });
 }
 
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {

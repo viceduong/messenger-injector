@@ -44,6 +44,7 @@ static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
 static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
+static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
@@ -158,6 +159,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) UIButton *outputCopyBtn;
 @property (nonatomic, strong) UIStackView *debugStack;
 @property (nonatomic, strong) UIButton *debugToggleBtn;
+@property (nonatomic, strong) UITextField *needleField;
 @property (nonatomic, strong) UIToolbar *kbToolbar;
 @property (nonatomic, strong) UIButton *hideKbFloatBtn;
 @property (nonatomic, copy) NSString *selID;
@@ -315,6 +317,15 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Inspect data" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
     UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Scan cache" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
     sniffBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    self.needleField = [[UITextField alloc] init];
+    self.needleField.placeholder = @"Text currently shown in list";
+    self.needleField.borderStyle = UITextBorderStyleRoundedRect;
+    self.needleField.font = [UIFont systemFontOfSize:13];
+    self.needleField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.needleField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.needleField.inputAccessoryView = self.kbToolbar;
+    UIButton *deepBtn = [self makeBtn:@"\U0001F4BE  Scan storage" bg:[UIColor systemIndigoColor] act:@selector(deepScanTapped) h:40];
+    deepBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *findDBBtn = [self makeBtn:@"Locate storage" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
@@ -327,6 +338,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:sniffBtn];
+    [self.debugStack addArrangedSubview:self.needleField];
+    [self.debugStack addArrangedSubview:deepBtn];
     [self.debugStack addArrangedSubview:findDBBtn];
     [self.debugStack addArrangedSubview:schemaBtn];
     [self.debugStack addArrangedSubview:sampleBtn];
@@ -741,6 +754,24 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.text = @"\U0001F50E Sniffing all snippet sources...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifySniff object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
+}
+
+- (void)deepScanTapped {
+    [self.view endEditing:YES];
+    NSString *needle = [self.needleField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (needle.length < 3) {
+        self.resultCard.hidden = NO;
+        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
+        self.resultLabel.textColor = [UIColor whiteColor];
+        self.resultLabel.text = @"Type the exact text the list shows first.";
+        return;
+    }
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"\U0001F4BE Scanning storage (up to a minute)...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyDeepScan object:nil userInfo:@{@"text": needle} deliverImmediately:YES];
 }
 
 - (void)copyOutputTapped {
