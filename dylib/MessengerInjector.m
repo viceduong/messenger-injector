@@ -846,6 +846,31 @@ static void MI_hResearch(NSString *threadId) {
               [r appendFormat:@"ground truth 1002754957 \u2192 %@ (expect 410725001: %@)\n", gt, (ok) ? @"PASS \u2705" : @"FAIL \u274C"]; }
             if (threadId.length > 0) { NSString *d=nil; long long pk=MI_bridgeResolve(db, threadId, 200, &d); [r appendFormat:@"target bridge %@ \u2192 %@ (pk=%lld)\n", threadId, d, pk]; }
 
+            // 4b) threads table (sync layer): full column list + full rows for target & ground truth.
+            // Research finding (messagix-js Lightspeed protocol): the app's LS*Thread stored
+            // procedures take BOTH threadKey and clientThreadKey — the `threads` table likely
+            // holds the mapping FB thread_key -> client layer key.
+            {
+                sqlite3_stmt *pi=NULL; NSMutableArray *tcols=[NSMutableArray array];
+                if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL)==SQLITE_OK) { while (sqlite3_step(pi)==SQLITE_ROW) { NSString *c=MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [tcols addObject:c]; } sqlite3_finalize(pi); }
+                [r appendFormat:@"threads columns: %@\n", [tcols componentsJoinedByString:@", "]];
+                if (tcols.count > 0) {
+                    sqlite3_stmt *tr=NULL;
+                    NSString *tq=[NSString stringWithFormat:@"SELECT * FROM threads WHERE thread_key IN ('%@','1002754957') LIMIT 2", threadId];
+                    if (sqlite3_prepare_v2(db, tq.UTF8String, -1, &tr, NULL)==SQLITE_OK) {
+                        int nrows=0;
+                        while (sqlite3_step(tr)==SQLITE_ROW && nrows<2) {
+                            nrows++;
+                            [r appendString:@"threads row:\n"];
+                            int cc=sqlite3_column_count(tr);
+                            for (int c=0;c<cc;c++) { [r appendFormat:@"  %@ = %@\n", tcols[c], MI_cstr(sqlite3_column_text(tr,c)) ?: @"NULL"]; }
+                        }
+                        sqlite3_finalize(tr);
+                        if (!nrows) [r appendString:@"threads: no rows for target/ground-truth\n"];
+                    }
+                }
+            }
+
             // 5) sender_contact_pk match (other person's real messages in their 1-on-1 thread)
             if (threadId.length > 0) {
                 sqlite3_stmt *s=NULL; NSMutableArray *det=[NSMutableArray array];
@@ -1071,6 +1096,37 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             NSString *pkMethod = @"none";
             BOOL gtPass = NO; // ground-truth validation result
             {
+                // --- Method 0 (PRIMARY candidate): threads.client_thread_key
+                // Research finding (messagix-js Lightspeed protocol): the app's
+                // LS*Thread stored procedures take both threadKey AND clientThreadKey —
+                // the sync-layer `threads` table likely maps FB thread_key -> client pk.
+                sqlite3_stmt *s0 = NULL;
+                int hasCTK = 0;
+                { sqlite3_stmt *pi=NULL;
+                  if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL)==SQLITE_OK) {
+                    while (sqlite3_step(pi)==SQLITE_ROW) { NSString *c=MI_cstr(sqlite3_column_text(pi,1)); if ([c isEqualToString:@"client_thread_key"]) hasCTK=1; }
+                    sqlite3_finalize(pi); }
+                }
+                [report appendFormat:@"[research] threads table has client_thread_key column: %@\n", hasCTK ? @"YES" : @"NO"];
+                if (hasCTK) {
+                    // ground truth first
+                    NSString *gtq = @"SELECT client_thread_key FROM threads WHERE thread_key = '1002754957' LIMIT 1";
+                    sqlite3_stmt *s0g = NULL; long long gtCtk = 0;
+                    if (sqlite3_prepare_v2(db, gtq, -1, &s0g, NULL)==SQLITE_OK) { if (sqlite3_step(s0g)==SQLITE_ROW) gtCtk = sqlite3_column_int64(s0g,0); sqlite3_finalize(s0g); }
+                    [report appendFormat:@"[research] ground truth threads.client_thread_key(1002754957) = %lld (expect 410725001: %@)\n", gtCtk, (gtCtk==410725001)?@"PASS \u2705":@"FAIL \u274C"];
+                    gtPass = (gtCtk == 410725001);
+                    // target
+                    NSString *q0 = [NSString stringWithFormat:@"SELECT client_thread_key FROM threads WHERE thread_key = '%@' LIMIT 1", MI_esc(threadId)];
+                    if (sqlite3_prepare_v2(db, q0.UTF8String, -1, &s0, NULL)==SQLITE_OK) {
+                        if (sqlite3_step(s0)==SQLITE_ROW) {
+                            long long ctk = sqlite3_column_int64(s0,0);
+                            if (ctk > 0) { threadPk = ctk; pkMethod = @"client_thread_key"; }
+                            [report appendFormat:@"[research] threads.client_thread_key(target) = %lld\n", ctk];
+                        } else { [report appendString:@"[research] threads: no row for target thread_key\n"]; }
+                        sqlite3_finalize(s0);
+                    }
+                }
+
                 // --- Ground truth (BOUNDED, fast): em kè thread = pk 410725001, other party = 1002754957.
                 // If the bridge returns 410725001 for 1002754957 → method is PROVEN on clean data.
                 NSString *gtDetail = nil;
