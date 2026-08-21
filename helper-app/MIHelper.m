@@ -45,6 +45,7 @@ static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
+static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
@@ -326,6 +327,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.needleField.inputAccessoryView = self.kbToolbar;
     UIButton *deepBtn = [self makeBtn:@"\U0001F4BE  Scan storage" bg:[UIColor systemIndigoColor] act:@selector(deepScanTapped) h:40];
     deepBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    UIButton *trowBtn = [self makeBtn:@"\U0001F5A5\uFE0F  Sync header" bg:[UIColor systemIndigoColor] act:@selector(threadRowTapped) h:40];
+    trowBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *findDBBtn = [self makeBtn:@"Locate storage" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
@@ -339,6 +342,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:sniffBtn];
     [self.debugStack addArrangedSubview:self.needleField];
+    [self.debugStack addArrangedSubview:trowBtn];
     [self.debugStack addArrangedSubview:deepBtn];
     [self.debugStack addArrangedSubview:findDBBtn];
     [self.debugStack addArrangedSubview:schemaBtn];
@@ -772,6 +776,24 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.text = @"\U0001F4BE Scanning storage (up to a minute)...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyDeepScan object:nil userInfo:@{@"text": needle} deliverImmediately:YES];
+}
+
+- (void)threadRowTapped {
+    [self.view endEditing:YES];
+    NSString *tid = _selID ?: @"";
+    if (tid.length == 0) {
+        self.resultCard.hidden = NO;
+        self.resultCard.backgroundColor = [UIColor systemOrangeColor];
+        self.resultLabel.textColor = [UIColor whiteColor];
+        self.resultLabel.text = @"Pick a person first.";
+        return;
+    }
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"Syncing header...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyThreadRow object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
 
 - (void)copyOutputTapped {

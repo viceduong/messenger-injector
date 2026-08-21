@@ -71,6 +71,7 @@ static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
+static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 
 static NSString *const kKeyMessage   = @"message";
 static NSString *const kKeyThreadID = @"threadId";
@@ -233,6 +234,7 @@ static void MI_hResearch(NSString *threadId, NSString *mode);
 static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_hSniff(NSString *threadId);
 static void MI_hDeepScan(NSString *needle);
+static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
 static void MI_postResult(NSString *tag, NSString *text);
 
@@ -1355,6 +1357,111 @@ static void MI_hDeepScan(NSString *needle) {
     });
 }
 
+// ============================================================
+// Insert-or-replace the sync-layer `threads` row for a chat.
+// Research: inbox UI reflects DB tables; fresh chats lack this row,
+// so the list has no local snippet source. Requires trigger stubs.
+// ============================================================
+static void MI_hThreadRow(NSString *threadId) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSMutableString *r = [NSMutableString string];
+            [r appendFormat:@"=== SYNC ROW (%@) ===\n", threadId];
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_postResult(@"progress", @"no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                MI_postResult(@"progress", @"DB open failed");
+                if (db) sqlite3_close(db);
+                return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+            // register dummy trigger functions (same as inject path)
+            sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+
+            long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+
+            // resolve pk + name from client layer for fallback values
+            long long pk = 0;
+            NSString *name = @"";
+            {
+                NSMutableArray *pks = [NSMutableArray array];
+                sqlite3_stmt *hs = NULL;
+                NSString *hq = [NSString stringWithFormat:@"SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1", threadId];
+                if (sqlite3_prepare_v2(db, hq.UTF8String, -1, &hs, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(hs) == SQLITE_ROW) [pks addObject:@(sqlite3_column_int64(hs,0))];
+                    sqlite3_finalize(hs);
+                }
+                if (pks.count == 0) {
+                    sqlite3_stmt *hs2 = NULL;
+                    NSString *hq2 = [NSString stringWithFormat:@"SELECT thread_pk FROM client_messages WHERE sender_contact_pk = %@ GROUP BY thread_pk ORDER BY COUNT(*) DESC LIMIT 1", threadId];
+                    if (sqlite3_prepare_v2(db, hq2.UTF8String, -1, &hs2, NULL) == SQLITE_OK) {
+                        if (sqlite3_step(hs2) == SQLITE_ROW) [pks addObject:@(sqlite3_column_int64(hs2,0))];
+                        sqlite3_finalize(hs2);
+                    }
+                }
+                if (pks.count > 0) pk = [pks[0] longLongValue];
+                sqlite3_stmt *ns = NULL;
+                NSString *nq = [NSString stringWithFormat:@"SELECT default_thread_name FROM client_threads WHERE pk = %lld", pk];
+                if (sqlite3_prepare_v2(db, nq.UTF8String, -1, &ns, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(ns) == SQLITE_ROW) name = MI_cstr(sqlite3_column_text(ns,0)) ?: @"";
+                    sqlite3_finalize(ns);
+                }
+            }
+
+            // top message text as snippet (from messages table)
+            NSString *snip = @"";
+            NSString *snipSender = @"";
+            {
+                sqlite3_stmt *ms = NULL;
+                NSString *mq = [NSString stringWithFormat:@"SELECT substr(text,1,120), sender_id FROM messages WHERE thread_key = '%@' ORDER BY primary_sort_key DESC LIMIT 1", threadId];
+                if (sqlite3_prepare_v2(db, mq.UTF8String, -1, &ms, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(ms) == SQLITE_ROW) {
+                        snip = MI_cstr(sqlite3_column_text(ms,0)) ?: @"";
+                        snipSender = MI_cstr(sqlite3_column_text(ms,1)) ?: @"";
+                    }
+                    sqlite3_finalize(ms);
+                }
+            }
+
+            char *err = NULL;
+            NSString *sql = [NSString stringWithFormat:
+                @"INSERT OR REPLACE INTO threads "
+                 "(thread_key, thread_type, folder_name, thread_picture_url_fallback, "
+                 "last_activity_timestamp_ms, last_read_watermark_timestamp_ms, remove_watermark_timestamp_ms, "
+                 "mute_expire_time_ms, snippet, is_admin_snippet, snippet_sender_contact_id, authority_level, "
+                 "ongoing_call_state, parent_thread_key, snippet_has_emoji, has_persistent_menu, disable_composer_input, "
+                 "cannot_unsend_reason, custom_emoji_image_url, viewed_plugin_key, viewed_plugin_context, "
+                 "mailbox_type, unsend_limit_ms, mute_calls_expire_time_ms, mute_mention_expire_time_ms, "
+                 "last_message_attachment_fbid, is_hidden, is_all_unread_message_missed_call_xma, "
+                 "thread_invites_enabled, thread_invites_enabled_v2, num_unread_subthreads, read_receipts_disabled_v2, "
+                 "sync_group, deletion_watermark_timestamp_ms, unread_message_count, is_suspended, "
+                 "contains_out_of_band_messages, typing_indicator_disabled, is_get_started_button_eligible, "
+                 "is_custom_thread_picture, is_disappearing_mode, unread_disappearing_message_count, "
+                 "should_round_thread_picture, is_tombstoned, is_placeholder, group_member_add_mode, "
+                 "capabilities, capabilities_2, capabilities_3, capabilities_4, capabilities_5, capabilities_6) "
+                 "VALUES "
+                 "('%@', 1, 'inbox', '/messaging/lightspeed/media_fallback/?entity_id=%@&entity_type=10&width=300&height=300', "
+                 "%lld, %lld, 0, 0, '%@', 0, '%@', 80, 0, -17, 0, 0, 0, 0, '', NULL, NULL, "
+                 "0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, 0, 0, 0, "
+                 "990792246600587262, 438433287420077057, 108156794884325379, 4303355924, 603632718068193285, 0)",
+                 threadId, threadId, now, now, MI_esc(snip), snipSender];
+            if (sqlite3_exec(db, sql.UTF8String, NULL, NULL, &err) == SQLITE_OK) {
+                [r appendFormat:@"threads row written (matched %d), snippet='%@'\n", sqlite3_changes(db), snip];
+            } else {
+                [r appendFormat:@"threads INSERT error: %s\n", err ? err : "?"];
+                if (err) sqlite3_free(err);
+            }
+
+            sqlite3_close(db);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
+        } @catch (NSException *e) {
+            MI_postResult(@"progress", [NSString stringWithFormat:@"syncrow exception: %@", e.reason]);
+        }
+    });
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2382,6 +2489,8 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hResearch(n.userInfo[@"threadId"] ?: @"", n.userInfo[@"mode"] ?: @"map"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"research: %@", e.name]); } }];
         [dnc addObserverForName:kNotifySniff object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hSniff(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"sniff obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hThreadRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"syncrow obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) {
                 @try {
