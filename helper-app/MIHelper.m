@@ -238,7 +238,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     ]];
 
     // ---------- Messages ----------
-    UILabel *s2 = [self stepLabel:@"2.  Write the conversation"];
+    UILabel *s2 = [self stepLabel:@"2.  Entries"];
     self.messageStack = [[UIStackView alloc] init];
     self.messageStack.axis = UILayoutConstraintAxisVertical;
     self.messageStack.spacing = 8;
@@ -252,7 +252,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [addBtn setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
 
     UILabel *prevLabel = [[UILabel alloc] init];
-    prevLabel.text = @"How it will look:";
+    prevLabel.text = @"Preview:";
     prevLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
     prevLabel.textColor = [UIColor tertiaryLabelColor];
 
@@ -301,7 +301,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     ]];
 
     // ---------- Debug (collapsed) ----------
-    self.debugToggleBtn = [self makeBtn:@"\u2699\uFE0F  Advanced / debug" bg:[UIColor secondarySystemBackgroundColor] act:@selector(toggleDebugTapped) h:40];
+    self.debugToggleBtn = [self makeBtn:@"\u2699\uFE0F  Advanced" bg:[UIColor secondarySystemBackgroundColor] act:@selector(toggleDebugTapped) h:40];
     self.debugToggleBtn.titleLabel.font = [UIFont systemFontOfSize:13];
 
     self.debugStack = [[UIStackView alloc] init];
@@ -310,19 +310,19 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.debugStack.translatesAutoresizingMaskIntoConstraints = NO;
     self.debugStack.hidden = YES;
 
-    UIButton *rescanBtn = [self makeBtn:@"\U0001F504  Re-read database" bg:[UIColor systemTealColor] act:@selector(rescanTapped) h:40];
-    UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Research mapping (selected person)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
-    UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Research SQL logic" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
-    UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Sniff snippet sources" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
+    UIButton *rescanBtn = [self makeBtn:@"\U0001F504  Refresh" bg:[UIColor systemTealColor] act:@selector(rescanTapped) h:40];
+    UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Lookup info" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
+    UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Inspect data" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Scan cache" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
     sniffBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     sqlBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    UIButton *findDBBtn = [self makeBtn:@"Find database file" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
-    UIButton *schemaBtn = [self makeBtn:@"Dump DB schema" bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
-    UIButton *sampleBtn = [self makeBtn:@"Dump sample data" bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
-    UIButton *crashBtn = [self makeBtn:@"Get crash log" bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
-    UIButton *listBtn = [self makeBtn:@"List all files" bg:[UIColor systemPurpleColor] act:@selector(listFilesTapped) h:40];
-    UIButton *dumpViewBtn = [self makeBtn:@"Dump view hierarchy" bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
+    UIButton *findDBBtn = [self makeBtn:@"Locate storage" bg:[UIColor secondarySystemBackgroundColor] act:@selector(findDBTapped) h:40];
+    UIButton *schemaBtn = [self makeBtn:@"Storage structure" bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
+    UIButton *sampleBtn = [self makeBtn:@"Sample export" bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
+    UIButton *crashBtn = [self makeBtn:@"Error reports" bg:[UIColor systemRedColor] act:@selector(crashTapped) h:40];
+    UIButton *listBtn = [self makeBtn:@"File list" bg:[UIColor systemPurpleColor] act:@selector(listFilesTapped) h:40];
+    UIButton *dumpViewBtn = [self makeBtn:@"UI tree" bg:[UIColor secondarySystemBackgroundColor] act:@selector(dumpViewTapped) h:40];
     [self.debugStack addArrangedSubview:rescanBtn];
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
@@ -658,7 +658,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
         self.resultLabel.textColor = [UIColor whiteColor];
         NSString *reason = kv[@"reason"] ?: @"";
         if ([reason containsString:@"entity_id_mismatch"]) {
-            self.resultLabel.text = @"\U0001F6D1 Refused: resolved chat belongs to a DIFFERENT person (safety gate). Try Advanced \u2192 Research mapping.";
+            self.resultLabel.text = @"\U0001F6D1 Refused: resolved chat belongs to a DIFFERENT person (safety gate). Try Advanced \u2192 Lookup info.";
         } else if ([reason containsString:@"name_not_found"]) {
             self.resultLabel.text = @"\U0001F6D1 Couldn't resolve that name to a contact.";
         } else {
@@ -673,8 +673,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     } else {
         self.resultCard.backgroundColor = [UIColor systemGreenColor];
         self.resultLabel.textColor = [UIColor whiteColor];
-        self.resultLabel.text = [NSString stringWithFormat:@"\u2705 Wrote %@ message%@ to \"%@\".\nForce-quit Messenger (swipe away), reopen, then check the chat.", n, [n isEqualToString:@"1"] ? @"" : @"s", _selName ?: @""];
-    self.statusLabel.text = [NSString stringWithFormat:@"\u2705 Delivered %@ message%@ to %@", n, [n isEqualToString:@"1"] ? @"" : @"s", _selName ?: @""];
+        self.resultLabel.text = [NSString stringWithFormat:@"\u2705 Done (%@). Reopen Messenger to view.", n];
+    self.statusLabel.text = [NSString stringWithFormat:@"\u2705 Done (%@)", n];
     self.statusLabel.backgroundColor = [UIColor systemGreenColor];
     }
     _injectPending = NO;
@@ -685,7 +685,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 // ============================================================
 - (void)toggleDebugTapped {
     self.debugStack.hidden = !self.debugStack.hidden;
-    [self.debugToggleBtn setTitle:self.debugStack.hidden ? @"\u2699\uFE0F  Advanced / debug" : @"\u2716  Close advanced" forState:UIControlStateNormal];
+    [self.debugToggleBtn setTitle:self.debugStack.hidden ? @"\u2699\uFE0F  Advanced" : @"\u2716  Close" forState:UIControlStateNormal];
 }
 
 - (void)postDebug:(NSString *)notif label:(NSString *)label {
