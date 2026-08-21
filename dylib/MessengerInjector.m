@@ -1310,37 +1310,42 @@ static void MI_hDeepScan(NSString *needle) {
             NSMutableString *r = [NSMutableString string];
             [r appendFormat:@"=== DEEP SCAN '%@' ===\n", needle];
 
-            // same roots MI_findDatabase uses
+            // TIGHT SCOPE: only the app-group that contains the known Messenger DB.
             NSFileManager *fm = [NSFileManager defaultManager];
-            NSMutableArray *roots = [NSMutableArray array];
-            NSArray *appGroups = [fm contentsOfDirectoryAtPath:@"/private/var/mobile/Containers/Shared/AppGroup" error:nil] ?: @[];
-            for (NSString *g in appGroups) {
-                [roots addObject:[NSString stringWithFormat:@"/private/var/mobile/Containers/Shared/AppGroup/%@", g]];
+            NSString *knownDB = MI_findDatabase();
+            NSString *root = nil;
+            if (knownDB.length > 0) {
+                NSRange asRange = [knownDB rangeOfString:@"Application Support"];
+                if (asRange.location != NSNotFound) root = [knownDB substringToIndex:asRange.location]; // app-group root
             }
-            [roots addObject:@"/private/var/mobile/Containers/Data/Application"];
-
-            NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-90*24*3600];
-            for (NSString *root in roots) {
+            if (root.length == 0) { [r appendString:@"no messenger appgroup found\n"]; }
+            else {
+                NSMutableArray *files = [NSMutableArray array];
                 NSDirectoryEnumerator *en = [fm enumeratorAtURL:[NSURL fileURLWithPath:root]
-                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLContentModificationDateKey]
+                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSFileSizeKey]
                                                         options:NSDirectoryEnumerationSkipsPackageDescendants
                                                    errorHandler:nil];
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 for (NSURL *u in en) {
-                    if (MI_ds_matches >= 25) break;
-                    NSNumber *isReg = nil; NSDate *mod = nil;
+                    if (CFAbsoluteTimeGetCurrent() - t0 > 10.0) { [r appendString:@"(time-capped)\n"]; break; }
+                    NSNumber *isReg = nil;
                     [u getResourceValue:&isReg forKey:NSURLIsRegularFileKey error:nil];
-                    [u getResourceValue:&mod forKey:NSURLContentModificationDateKey error:nil];
                     if (![isReg boolValue]) continue;
-                    if (mod && [mod compare:cutoff] == NSOrderedAscending) continue;
-                    NSString *ext = u.pathExtension.lowercaseString;
-                    NSSet *okExt = [NSSet setWithArray:@[@"db", @"sqlite", @"sqlite3", @"store", @""]];
-                    if (![okExt containsObject:ext]) continue;
                     NSDictionary *sz = [u resourceValuesForKeys:@[NSFileSize] error:nil];
                     unsigned long long fsz = [sz[NSFileSize] unsignedLongLongValue];
-                    if (fsz == 0 || fsz > 300*1024*1024) continue;
-                    MI_deepScanFile(u.path, needle, r);
+                    if (fsz == 0 || fsz > 80*1024*1024) continue;
+                    NSString *name = u.lastPathComponent.lowercaseString;
+                    BOOL looksDB = [name hasSuffix:@".db"] || [name hasSuffix:@".sqlite"] || [name hasSuffix:@".store"] || [name containsString:@"lightspeed"];
+                    if (!looksDB) continue;
+                    [files addObject:u.path];
                 }
-                if (MI_ds_matches >= 25) break;
+                [r appendFormat:@"scope %@ -> %d candidate files\n", root.lastPathComponent ?: root, (int)files.count];
+                for (NSString *f in files) {
+                    if (MI_ds_matches >= 15 || CFAbsoluteTimeGetCurrent() - t0 > 20.0) break;
+                    @autoreleasepool {
+                        MI_deepScanFile(f, needle, r);
+                    }
+                }
             }
             [r appendFormat:@"scanned=%d files hits=%d\n", MI_ds_files, MI_ds_matches];
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
