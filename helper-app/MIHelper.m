@@ -192,7 +192,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.statusLabel.layer.cornerRadius = 8;
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.numberOfLines = 1;
-    self.statusLabel.text = @"\U00023F3 Reading Messenger database... (open Messenger once)";
+    self.statusLabel.text = @"\U000023F3 Reading Messenger database... (open Messenger once)";
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [self.statusLabel.heightAnchor constraintEqualToConstant:34].active = YES;
 
