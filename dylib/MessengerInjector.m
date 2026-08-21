@@ -1572,26 +1572,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            // Sync-layer snippet: the inbox/chat LIST renders from `threads`, not client_threads
-            {
-                NSDictionary *lastMsg = messages.lastObject;
-                NSString *lastText2 = lastMsg[@"t"] ?: @"";
-                BOOL lastIsMe = [lastMsg[@"s"] isEqualToString:@"me"];
-                NSString *snip = lastIsMe ? [NSString stringWithFormat:@"You: %@", lastText2] : lastText2;
-                long long ts2 = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
-                NSString *upd2 = [NSString stringWithFormat:
-                    @"UPDATE threads SET snippet = '%@', last_activity_timestamp_ms = %lld "
-                    @"WHERE thread_key = '%@'",
-                    MI_esc(snip), ts2, MI_esc(threadId)];
-                char *e2 = NULL;
-                if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
-                    [report appendString:@"threads (sync) snippet updated\n"];
-                } else {
-                    [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
-                    if (e2) sqlite3_free(e2);
-                }
-            }
-
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
