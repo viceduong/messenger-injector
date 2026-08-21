@@ -159,7 +159,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 @property (nonatomic, strong) UILabel *resultBanner;
 @property (nonatomic, strong) UITextView *resultsView;
 @property (nonatomic, strong) UIButton *detailsToggleBtn;
-@property (nonatomic, strong) UIView *advancedSection;
+@property (nonatomic, strong) UIStackView *advancedSection;
 @property (nonatomic, strong) UIButton *advancedToggleBtn;
 @end
 
@@ -319,7 +319,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     advNote.textColor = [UIColor tertiaryLabelColor];
     advNote.numberOfLines = 0;
 
-    self.threadField = [self makeField:@"Manual thread ID (if scan can't find it)" UIKeyboardType:UIKeyboardDefault];
+    self.threadField = [self makeField:@"Manual thread ID (if scan can't find it)" UIKeyboardType:UIKeyboardTypeDefault];
 
     UIButton *findDBBtn   = [self makeBtn:@"Find database file"       bg:[UIColor systemGray3Color] act:@selector(findDBTapped)   h:36];
     UIButton *schemaBtn   = [self makeBtn:@"Dump DB schema"           bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:36];
