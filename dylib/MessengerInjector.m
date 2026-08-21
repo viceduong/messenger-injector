@@ -795,7 +795,7 @@ static long long MI_bridgeResolve(sqlite3 *db, NSString *threadKey, long long li
 }
 
 static void MI_hResearch(NSString *threadId) {
-    MI_progress([@"research: start %@", threadId ? threadId : @"-"]);
+    MI_progress([NSString stringWithFormat:@"research: start %@", threadId ?: @"-"]);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
             NSMutableString *r = [NSMutableString string];
@@ -804,7 +804,7 @@ static void MI_hResearch(NSString *threadId) {
             if (!dbPath.length) { MI_postResult(@"research", @"No database found."); return; }
             sqlite3 *db = NULL;
             if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
-                MI_postResult(@"research", [NSString stringWithFormat:@"DB open failed: %s", db ? sqlite3_errmsg(db) : @"null"]);
+                MI_postResult(@"research", [NSString stringWithFormat:@"DB open failed: %s", db ? sqlite3_errmsg(db) : "null"]);
                 if (db) sqlite3_close(db);
                 return;
             }
@@ -838,12 +838,12 @@ static void MI_hResearch(NSString *threadId) {
                         if (pks.count) [hits addObject:[NSString stringWithFormat:@"%@\u2192%@", c, [pks componentsJoinedByString:@","]];
                     }
                 }
-                [r appendFormat:@"target in client_threads: %@\n", hits.count?[hits componentsJoinedByString:@" | "]:@"NO MATCH (no row contains this FB ID)"];
+                [r appendFormat:@"target in client_threads: %@\n", (hits.count > 0) ? [hits componentsJoinedByString:@" | "] : @"NO MATCH (no row contains this FB ID)"];
             }
 
             // 4) ground truth + target bridge (bounded)
             { NSString *gt=nil; long long gtpk=MI_bridgeResolve(db, @"1002754957", 200, &gt); BOOL ok=(gtpk==410725001); 
-              [r appendFormat:@"ground truth 1002754957 \u2192 %@ (expect 410725001: %@)\n", gt, ok?@"PASS \u2705":@"FAIL \u274C"]; }
+              [r appendFormat:@"ground truth 1002754957 \u2192 %@ (expect 410725001: %@)\n", gt, (ok) ? @"PASS \u2705" : @"FAIL \u274C"]; }
             if (threadId.length > 0) { NSString *d=nil; long long pk=MI_bridgeResolve(db, threadId, 200, &d); [r appendFormat:@"target bridge %@ \u2192 %@ (pk=%lld)\n", threadId, d, pk]; }
 
             // 5) sender_contact_pk match (other person's real messages in their 1-on-1 thread)
@@ -851,7 +851,7 @@ static void MI_hResearch(NSString *threadId) {
                 sqlite3_stmt *s=NULL; NSMutableArray *det=[NSMutableArray array];
                 NSString *q=[NSString stringWithFormat:@"SELECT DISTINCT thread_pk FROM client_messages WHERE sender_contact_pk = %lld LIMIT 5", threadId.longLongValue];
                 if (sqlite3_prepare_v2(db, q.UTF8String, -1, &s, NULL)==SQLITE_OK) { while (sqlite3_step(s)==SQLITE_ROW) [det addObject:[NSString stringWithFormat:@"pk=%lld", sqlite3_column_int64(s,0)]]; sqlite3_finalize(s); }
-                [r appendFormat:@"sender_contact_pk match: %@\n", det.count?[det componentsJoinedByString:@", "]:@"none"];
+                [r appendFormat:@"sender_contact_pk match: %@\n", (det.count > 0) ? [det componentsJoinedByString:@", "] : @"none"];
             }
 
             // 6) contact names for the target
@@ -1217,7 +1217,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                 }
                 NSMutableSet *eids = [NSMutableSet set];
                 NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"entity_id=(\\d+)" options:0 error:NULL];
-                [re enumerateMatchesInString:allUrls options:0 range:NSMakeRange(0, allUrls.length) usingBlock:^(NSTextCheckingResult *m, void *ctx, void *stop) {
+                [re enumerateMatchesInString:allUrls options:0 range:NSMakeRange(0, allUrls.length) usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags flags, BOOL *stop) {
                     [eids addObject:[allUrls substringWithRange:[m rangeAtIndex:1]]];
                 }];
                 // Also: does the target user have real (non-ours) messages in this thread?
