@@ -691,24 +691,22 @@ static void MI_hThreads(void) {
             }
             MI_progress([NSString stringWithFormat:@"threads: found %d", (int)threads.count]);
 
-            // Also try client_threads for names (join via client_messages)
+            // Enrich names from the sync-layer contacts table (fast, no joins).
+            // 1-on-1 thread_key = other person's FB ID = contacts.id.
             if (threads.count > 0) {
                 for (NSMutableDictionary *t in threads) {
                     if ([t[@"n"] length] > 0) continue; // already has name
-                    // Try client_threads.default_thread_name
                     sqlite3_stmt *cs = NULL;
                     NSString *cq = [NSString stringWithFormat:
-                        @"SELECT ct.default_thread_name FROM client_threads ct "
-                        @"JOIN client_messages cm ON cm.thread_pk = ct.pk "
-                        @"JOIN messages m ON cm.resonance_offline_threading_id = m.offline_threading_id "
-                        @"WHERE m.thread_key = '%@' LIMIT 1", MI_esc(t[@"k"])];
+                        @"SELECT name FROM contacts WHERE id = '%@' LIMIT 1", MI_esc(t[@"k"])];
                     if (sqlite3_prepare_v2(db, cq.UTF8String, -1, &cs, NULL) == SQLITE_OK) {
                         if (sqlite3_step(cs) == SQLITE_ROW) {
                             NSString *n = MI_cstr(sqlite3_column_text(cs, 0));
                             if (n.length > 0 && ![n isEqualToString:@"NULL"]) t[@"n"] = n;
                         }
                         sqlite3_finalize(cs);
-                    }                }
+                    }
+                }
             }
 
             sqlite3_close(db);
@@ -727,6 +725,71 @@ static void MI_hThreads(void) {
         }
     });
     MI_progress(@"threads: dispatched");
+}
+
+// ============================================================
+// Bounded thread_pk bridge + query deadline guard
+// ============================================================
+// The old approach JOINed client_messages × messages on a CAST key:
+// unindexed full cross-scan (O(N×M)) → hung the inject for minutes.
+// Bounded approach: collect ≤N offline_threading_ids for the thread,
+// then ONE IN-list lookup in client_messages (single pass max).
+
+struct MIQueryDeadline { double deadline; };
+static int MI_progress_cb(void *ud) {
+    struct MIQueryDeadline *d = (struct MIQueryDeadline *)ud;
+    return (CFAbsoluteTimeGetCurrent() > d->deadline) ? 1 : 0;
+}
+// NOTE: d must outlive the queries that run while armed (caller-owned).
+static void MI_armDeadline(sqlite3 *db, struct MIQueryDeadline *d, double seconds) {
+    d->deadline = CFAbsoluteTimeGetCurrent() + seconds;
+    sqlite3_progress_handler(db, 10000, MI_progress_cb, d);
+}
+static void MI_disarmDeadline(sqlite3 *db) {
+    sqlite3_progress_handler(db, 0, NULL, NULL);
+}
+
+static long long MI_bridgeResolve(sqlite3 *db, NSString *threadKey, long long limit, NSString **outDetail) {
+    struct MIQueryDeadline dl;
+    MI_armDeadline(db, &dl, 10.0);
+    long long bestPk = 0;
+    NSMutableArray *ids = [NSMutableArray array];
+    sqlite3_stmt *s1 = NULL;
+    NSString *q1 = [NSString stringWithFormat:
+        @"SELECT offline_threading_id FROM messages WHERE thread_key = '%@' LIMIT %lld",
+        MI_esc(threadKey), limit];
+    if (sqlite3_prepare_v2(db, q1.UTF8String, -1, &s1, NULL) == SQLITE_OK) {
+        while (sqlite3_step(s1) == SQLITE_ROW) {
+            [ids addObject:[NSString stringWithFormat:@"%lld", sqlite3_column_int64(s1, 0)]];
+        }
+        sqlite3_finalize(s1);
+    }
+    if (ids.count == 0) {
+        MI_disarmDeadline(db);
+        *outDetail = @"no messages for thread";
+        return 0;
+    }
+    NSMutableArray *vals = [NSMutableArray array];
+    for (NSString *i in ids) [vals addObject:[NSString stringWithFormat:@"'%@'", i]];
+    NSString *q2 = [NSString stringWithFormat:
+        @"SELECT thread_pk, COUNT(*) FROM client_messages WHERE resonance_offline_threading_id IN (%@) "
+        @"GROUP BY thread_pk ORDER BY COUNT(*) DESC LIMIT 3", [vals componentsJoinedByString:@","]];
+    sqlite3_stmt *s2 = NULL;
+    if (sqlite3_prepare_v2(db, q2.UTF8String, -1, &s2, NULL) == SQLITE_OK) {
+        NSMutableArray *det = [NSMutableArray array];
+        while (sqlite3_step(s2) == SQLITE_ROW) {
+            long long pk = sqlite3_column_int64(s2, 0);
+            long long n = sqlite3_column_int64(s2, 1);
+            [det addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", pk, n]];
+            if (bestPk == 0) bestPk = pk;
+        }
+        sqlite3_finalize(s2);
+        *outDetail = det.count > 0 ? [det componentsJoinedByString:@", "] : @"no client match";
+    } else {
+        *outDetail = [NSString stringWithFormat:@"SQL: %s", sqlite3_errmsg(db)];
+    }
+    MI_disarmDeadline(db);
+    return bestPk;
 }
 
 // ============================================================
@@ -918,56 +981,19 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
             NSString *pkMethod = @"none";
             BOOL gtPass = NO; // ground-truth validation result
             {
-                // --- Ground truth: em kè thread is pk=410725001, other party=1002754957
-                // (proven: its profile URL contains entity_id=1002754957, and its
-                //  client_messages rows are from 100003506470529 + 1002754957 only).
-                // If the JOIN bridge returns 410725001 for 1002754957 → bridge is PROVEN.
-                NSString *gtQuery =
-                    @"SELECT cm.thread_pk, COUNT(*) AS n FROM client_messages cm "
-                    @"JOIN messages m ON cm.resonance_offline_threading_id = CAST(m.offline_threading_id AS TEXT) "
-                    @"WHERE m.thread_key = '1002754957' "
-                    @"GROUP BY cm.thread_pk ORDER BY n DESC LIMIT 3";
-                sqlite3_stmt *sgt = NULL;
-                if (sqlite3_prepare_v2(db, gtQuery.UTF8String, -1, &sgt, NULL) == SQLITE_OK) {
-                    NSMutableArray *gtr = [NSMutableArray array];
-                    while (sqlite3_step(sgt) == SQLITE_ROW) {
-                        [gtr addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)",
-                                        sqlite3_column_int64(sgt, 0), sqlite3_column_int64(sgt, 1)]];
-                    }
-                    sqlite3_finalize(sgt);
-                    BOOL gtOk = NO;
-                    for (NSString *g in gtr) if ([g hasPrefix:@"pk=410725001"]) gtOk = YES;
-                    gtPass = gtOk;
-                    [report appendFormat:@"[research] ground truth 1002754957 → %@ (expect pk=410725001: %@)\n",
-                        gtr.count > 0 ? [gtr componentsJoinedByString:@", "] : @"NO MATCH", gtOk ? @"PASS ✅" : @"FAIL ❌"];
-                } else {
-                    [report appendFormat:@"[research] ground truth SQL error: %s\n", sqlite3_errmsg(db)];
-                }
+                // --- Ground truth (BOUNDED, fast): em kè thread = pk 410725001, other party = 1002754957.
+                // If the bridge returns 410725001 for 1002754957 → method is PROVEN on clean data.
+                NSString *gtDetail = nil;
+                long long gtPk = MI_bridgeResolve(db, @"1002754957", 200, &gtDetail);
+                gtPass = (gtPk == 410725001);
+                [report appendFormat:@"[research] ground truth 1002754957 → %@ (expect pk=410725001: %@)\n",
+                    gtDetail, gtPass ? @"PASS ✅" : @"FAIL ❌"];
 
-                // --- Method 1: offline_threading_id bridge (majority vote)
-                // Real rows: client_messages.resonance_offline_threading_id =
-                //            messages.offline_threading_id (same message, two layers).
-                // This is the only table-level bridge between FB thread_key and thread_pk.
-                sqlite3_stmt *s = NULL;
-                NSString *q1 = [NSString stringWithFormat:
-                    @"SELECT cm.thread_pk, COUNT(*) AS n FROM client_messages cm "
-                    @"JOIN messages m ON cm.resonance_offline_threading_id = CAST(m.offline_threading_id AS TEXT) "
-                    @"WHERE m.thread_key = '%@' "
-                    @"GROUP BY cm.thread_pk ORDER BY n DESC LIMIT 3", MI_esc(threadId)];
-                if (sqlite3_prepare_v2(db, q1.UTF8String, -1, &s, NULL) == SQLITE_OK) {
-                    NSMutableArray *jres = [NSMutableArray array];
-                    while (sqlite3_step(s) == SQLITE_ROW) {
-                        long long jpk = sqlite3_column_int64(s, 0);
-                        long long jn = sqlite3_column_int64(s, 1);
-                        [jres addObject:[NSString stringWithFormat:@"pk=%lld(n=%lld)", jpk, jn]];
-                        if (threadPk == 0) { threadPk = jpk; pkMethod = @"join_bridge"; }
-                    }
-                    sqlite3_finalize(s);
-                    [report appendFormat:@"[research] join_bridge %@ → %@\n", threadId,
-                        jres.count > 0 ? [jres componentsJoinedByString:@", "] : @"NO MATCH"];
-                } else {
-                    [report appendFormat:@"[research] join_bridge SQL error: %s\n", sqlite3_errmsg(db)];
-                }
+                // --- Method 1: bounded offline_threading_id bridge (≤200 ids, single IN lookup)
+                NSString *jbDetail = nil;
+                long long jbPk = MI_bridgeResolve(db, threadId, 200, &jbDetail);
+                if (jbPk > 0) { threadPk = jbPk; pkMethod = @"bridge_bounded"; }
+                [report appendFormat:@"[research] bridge %@ → %@\n", threadId, jbDetail];
 
                 // --- Method 2: FB ID anywhere in client_threads row
                 if (threadPk == 0) {
