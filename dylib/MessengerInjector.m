@@ -882,7 +882,7 @@ static void MI_hResearch(NSString *threadId) {
             // 6) contact names for the target
             if (threadId.length > 0) {
                 sqlite3_stmt *s=NULL; NSString *nm=@"NOT FOUND";
-                if (sqlite3_prepare_v2(db, [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id='%@'", MI_esc(threadId)], -1, &s, NULL)==SQLITE_OK){ if (sqlite3_step(s)==SQLITE_ROW) nm=MI_cstr(sqlite3_column_text(s,0)) ?: @"NULL"; sqlite3_finalize(s); }
+                if (sqlite3_prepare_v2(db, [NSString stringWithFormat:@"SELECT name FROM contacts WHERE id='%@'", MI_esc(threadId)].UTF8String, -1, &s, NULL)==SQLITE_OK){ if (sqlite3_step(s)==SQLITE_ROW) nm=MI_cstr(sqlite3_column_text(s,0)) ?: @"NULL"; sqlite3_finalize(s); }
                 [r appendFormat:@"contact (sync) name: %@\n", nm];
                 sqlite3_stmt *s2=NULL; int cc=0;
                 NSString *q2=[NSString stringWithFormat:@"SELECT pk, contact_id, displayed_name FROM client_contacts WHERE contact_id='%@' OR pk=%@ LIMIT 3", MI_esc(threadId), threadId];
@@ -1112,7 +1112,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                     // ground truth first
                     NSString *gtq = @"SELECT client_thread_key FROM threads WHERE thread_key = '1002754957' LIMIT 1";
                     sqlite3_stmt *s0g = NULL; long long gtCtk = 0;
-                    if (sqlite3_prepare_v2(db, gtq, -1, &s0g, NULL)==SQLITE_OK) { if (sqlite3_step(s0g)==SQLITE_ROW) gtCtk = sqlite3_column_int64(s0g,0); sqlite3_finalize(s0g); }
+                    if (sqlite3_prepare_v2(db, gtq.UTF8String, -1, &s0g, NULL)==SQLITE_OK) { if (sqlite3_step(s0g)==SQLITE_ROW) gtCtk = sqlite3_column_int64(s0g,0); sqlite3_finalize(s0g); }
                     [report appendFormat:@"[research] ground truth threads.client_thread_key(1002754957) = %lld (expect 410725001: %@)\n", gtCtk, (gtCtk==410725001)?@"PASS \u2705":@"FAIL \u274C"];
                     gtPass = (gtCtk == 410725001);
                     // target
