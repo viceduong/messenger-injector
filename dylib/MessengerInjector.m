@@ -1461,6 +1461,7 @@ static void MI_hThreadRow(NSString *threadId) {
             // register dummy trigger functions (same as inject path)
             sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            sqlite3_create_function(db, "actor_id_for_sync_group", -1, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
 
             long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
 
@@ -1579,6 +1580,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             // (triggers reference them; without registration, INSERT fails)
             sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            sqlite3_create_function(db, "actor_id_for_sync_group", -1, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             // Dynamically stub EVERY app-defined function referenced by DB triggers,
             // otherwise our writes fail with "no such function" when triggers fire.
             {
