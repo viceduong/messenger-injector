@@ -1536,39 +1536,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            // List all client_threads (pk, thread_key, thread_name) for debugging
-            {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT pk, thread_key, default_thread_name, thread_name FROM client_threads LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
-                    [report appendString:@"\n=== client_threads list ===\n"];
-                    [report appendString:@"pk | thread_key | default_thread_name | thread_name\n"];
-                    int rn = 0;
-                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
-                        [report appendFormat:@"%@ | %@ | %@ | %@\n",
-                            MI_cstr(sqlite3_column_text(s, 0)),
-                            MI_cstr(sqlite3_column_text(s, 1)),
-                            MI_cstr(sqlite3_column_text(s, 2)),
-                            MI_cstr(sqlite3_column_text(s, 3))];
-                        rn++;
-                    }
-                    sqlite3_finalize(s);
-                }
-            }
-            // List distinct thread_keys from messages table (FB IDs)
-            {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT DISTINCT thread_key FROM messages LIMIT 20", -1, &s, NULL) == SQLITE_OK) {
-                    [report appendString:@"\n=== distinct thread_keys from messages ===\n"];
-                    int rn = 0;
-                    while (sqlite3_step(s) == SQLITE_ROW && rn < 20) {
-                        [report appendFormat:@"%@\n", MI_cstr(sqlite3_column_text(s, 0))];
-                        rn++;
-                    }
-                    sqlite3_finalize(s);
-                }
-            }
             // Force WAL checkpoint so changes are written to main DB file
-            sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
+            sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
             MI_progress(@"inject: WAL checkpoint done");
             if (threadPk > 0) {
                 NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
@@ -1603,38 +1572,23 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            // === Schema research: the app's own join logic (views) + sync→client materialization (triggers) ===
-            // Small, safe — view/trigger SQL is a handful of lines each.
+            // Sync-layer snippet: the inbox/chat LIST renders from `threads`, not client_threads
             {
-                sqlite3_stmt *sv = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &sv, NULL) == SQLITE_OK) {
-                    NSMutableArray *tns = [NSMutableArray array];
-                    while (sqlite3_step(sv) == SQLITE_ROW) {
-                        NSString *tn = MI_cstr(sqlite3_column_text(sv, 0));
-                        if (tn) [tns addObject:tn];
-                    }
-                    sqlite3_finalize(sv);
-                    if (tns.count > 0) [report appendFormat:@"\n[tables] %@\n", [tns componentsJoinedByString:@", "]];
-                }
-                sqlite3_stmt *svw = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL ORDER BY name", -1, &svw, NULL) == SQLITE_OK) {
-                    while (sqlite3_step(svw) == SQLITE_ROW) {
-                        NSString *vn = MI_cstr(sqlite3_column_text(svw, 0)) ?: @"?";
-                        NSString *vsql = MI_cstr(sqlite3_column_text(svw, 1)) ?: @"";
-                        if (vsql.length > 400) vsql = [vsql substringToIndex:400];
-                        [report appendFormat:@"[view %@] %@\n", vn, vsql];
-                    }
-                    sqlite3_finalize(svw);
-                }
-                sqlite3_stmt *svt = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name", -1, &svt, NULL) == SQLITE_OK) {
-                    while (sqlite3_step(svt) == SQLITE_ROW) {
-                        NSString *tn = MI_cstr(sqlite3_column_text(svt, 0)) ?: @"?";
-                        NSString *tsql = MI_cstr(sqlite3_column_text(svt, 1)) ?: @"";
-                        if (tsql.length > 400) tsql = [tsql substringToIndex:400];
-                        [report appendFormat:@"[trigger %@] %@\n", tn, tsql];
-                    }
-                    sqlite3_finalize(svt);
+                NSDictionary *lastMsg = messages.lastObject;
+                NSString *lastText2 = lastMsg[@"t"] ?: @"";
+                BOOL lastIsMe = [lastMsg[@"s"] isEqualToString:@"me"];
+                NSString *snip = lastIsMe ? [NSString stringWithFormat:@"You: %@", lastText2] : lastText2;
+                long long ts2 = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+                NSString *upd2 = [NSString stringWithFormat:
+                    @"UPDATE threads SET snippet = '%@', last_activity_timestamp_ms = %lld "
+                    @"WHERE thread_key = '%@'",
+                    MI_esc(snip), ts2, MI_esc(threadId)];
+                char *e2 = NULL;
+                if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
+                    [report appendString:@"threads (sync) snippet updated\n"];
+                } else {
+                    [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
+                    if (e2) sqlite3_free(e2);
                 }
             }
 
