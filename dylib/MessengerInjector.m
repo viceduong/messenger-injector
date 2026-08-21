@@ -805,7 +805,8 @@ static NSString *MI_normalizeName(NSString *s) {
     return [[out stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] lowercaseString];
 }
 
-static void MI_hResearch(NSString *threadId, NSString *mode) {
+static void MI_hResearch(NSString *threadIdIn, NSString *mode) {
+    __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"research(%@): start %@", mode ?: @"map", threadId ?: @"-"]);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
@@ -960,7 +961,8 @@ static void MI_hResearch(NSString *threadId, NSString *mode) {
 // ============================================================
 // Conversation injection (NEW v2.0)
 // ============================================================
-static void MI_hInject(NSString *threadId, NSArray *messages) {
+static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
+    __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
