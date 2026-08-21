@@ -39,6 +39,7 @@ static NSString *const kNotifyFindDB     = @"com.messenger.injector.findDB";
 static NSString *const kNotifySchema  = @"com.messenger.injector.dumpSchema";
 static NSString *const kNotifySample  = @"com.messenger.injector.dumpSample";
 static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
+static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 
@@ -232,6 +233,8 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     UIButton *schemaBtn   = [self makeBtn:@"Dump DB Schema"       bg:[UIColor systemOrangeColor] act:@selector(dumpSchemaTapped) h:40];
     UIButton *sampleBtn   = [self makeBtn:@"Dump Sample Data"     bg:[UIColor systemOrangeColor] act:@selector(dumpSampleTapped) h:40];
     UIButton *threadsBtn  = [self makeBtn:@"Scan Threads"         bg:[UIColor systemTealColor] act:@selector(threadsTapped) h:40];
+    UIButton *researchBtn = [self makeBtn:@"🔬 Research thread mapping (uses thread ID above)" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
+    researchBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     
     // Thread picker list (populated when Scan Threads is tapped)
     self.threadListStack = [[UIStackView alloc] init];
@@ -268,6 +271,7 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [stack addArrangedSubview:schemaBtn];
     [stack addArrangedSubview:sampleBtn];
     [stack addArrangedSubview:threadsBtn];
+    [stack addArrangedSubview:researchBtn];
     [stack addArrangedSubview:self.threadListStack];
     [stack addArrangedSubview:crashBtn];
     [stack addArrangedSubview:listFilesBtn];
@@ -540,6 +544,15 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyThreads object:nil userInfo:@{} deliverImmediately:YES];
     [self flash:@"\U0001F851 scan threads" red:NO];
+}
+
+- (void)researchTapped {
+    [self.view endEditing:YES];
+    NSString *tid = [self.threadField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    self.resultsView.text = @"Running thread-mapping research (a few seconds)...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyResearch object:nil userInfo:@{@"threadId": tid ?: @""} deliverImmediately:YES];
+    [self flash:@"\U0001F851 research" red:NO];
 }
 
 - (void)crashTapped {
