@@ -798,13 +798,11 @@ static long long MI_bridgeResolve(sqlite3 *db, NSString *threadKey, long long li
 // "Trứnh Đừc Linh" -> "trinh duc linh"; "Trinh Duc Linh" -> "trinh duc linh"
 static NSString *MI_normalizeName(NSString *s) {
     if (s.length == 0) return @"";
-    CFMutableStringRef cf = CFStringCreateMutableCopy(NULL, (CFIndex)s.length);
+    CFMutableStringRef cf = CFStringCreateMutableCopy(NULL, s);
     CFStringTransform(cf, NULL, kCFStringTransformToLatin, false);
     CFStringTransform(cf, NULL, kCFStringTransformStripDiacritics, false);
     NSString *out = CFBridgingRelease(cf);
-    return [[[out stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]
-             stringByFoldingWithOptions:NSCaseInsensitiveSearch diacriticInsensitive:YES]
-            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    return [[out stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] lowercaseString];
 }
 
 static void MI_hResearch(NSString *threadId, NSString *mode) {
@@ -1138,8 +1136,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                             if (sqlite3_step(s2) == SQLITE_ROW) {
                                 threadPk = sqlite3_column_int64(s2, 0);
                                 pkMethod = @"row_scan";
-                                [report appendFormat:@"[research] row_scan hit: pk=%lld name=%@
-", threadPk, MI_cstr(sqlite3_column_text(s2,1))];
+                                [report appendFormat:@"[research] row_scan hit: pk=%lld name=%@\n", threadPk, MI_cstr(sqlite3_column_text(s2,1))];
                             }
                             sqlite3_finalize(s2);
                         }
@@ -1159,8 +1156,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                             if (threadPk == 0) { threadPk = sqlite3_column_int64(s2b, 0); pkMethod = @"sender_contact_pk"; }
                         }
                         sqlite3_finalize(s2b);
-                        [report appendFormat:@"[research] sender_contact_pk: %@
-", cands.count ? [cands componentsJoinedByString:@", "] : @"none"];
+                        [report appendFormat:@"[research] sender_contact_pk: %@\n", cands.count ? [cands componentsJoinedByString:@", "] : @"none"];
                     }
                 }
 
@@ -1182,8 +1178,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                             sqlite3_finalize(sn2);
                         }
                     }
-                    [report appendFormat:@"[research] names for target: %@
-", names.count ? [names componentsJoinedByString:@", "] : @"NONE"];
+                    [report appendFormat:@"[research] names for target: %@\n", names.count ? [names componentsJoinedByString:@", "] : @"NONE"];
                     for (NSString *nm in names) {
                         if (threadPk != 0) break;
                         sqlite3_stmt *se = NULL;
@@ -1207,8 +1202,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages) {
                                         if (hit.length > 0) { threadPk = sqlite3_column_int64(sa,0); pkMethod = @"name_normalized"; [near addObject:hit]; }
                                     }
                                     sqlite3_finalize(sa);
-                                    if (near.count > 0) [report appendFormat:@"[research] normalized name hits: %@
-", [near componentsJoinedByString:@", "]];
+                                    if (near.count > 0) [report appendFormat:@"[research] normalized name hits: %@\n", [near componentsJoinedByString:@", "]];
                                 }
                             }
                         }
