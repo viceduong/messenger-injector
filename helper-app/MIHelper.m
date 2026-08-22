@@ -477,6 +477,7 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 // ============================================================
 - (void)handleResultWithTag:(NSString *)tag text:(NSString *)text {
     _resultText = [NSString stringWithFormat:@"[%@]\n%@", tag, text];
+    [[UIPasteboard generalPasteboard] setString:_resultText]; // zero-tap copy
     if ([tag isEqualToString:@"threadList"]) { [self populatePeople:text]; return; }
     if ([tag isEqualToString:@"threads"]) {
         // scan error — show in status

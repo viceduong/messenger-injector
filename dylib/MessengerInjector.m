@@ -3010,7 +3010,11 @@ static void MI_ctor(void) {
 
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
 
-    // Auto class-scan DISABLED for crash bisect (trigger manually via Diagnostics).
+    // Auto class-scan (per-image variant - crash-safe): map current architecture.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        MI_hClassScan();
+    });
+
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSDistributedNotificationCenter *dnc = [NSDistributedNotificationCenter defaultCenter];
