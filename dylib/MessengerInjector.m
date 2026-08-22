@@ -1700,6 +1700,76 @@ static void MI_hMark(NSString *threadId) {
 // Rebuild the target's sync threads row as a FULL-FIDELITY clone of a healthy
 // chat row (em kè template), with target-specific overrides. Heals rows that
 // were destroyed by earlier INSERT OR REPLACE runs.
+// Core: clone a healthy threads row (em kè template, ~150 cols) for threadId.
+// Returns nil on success, else an error/status message.
+static NSString *MI_repairRowCore(sqlite3 *db, NSString *threadId, NSString *snippetOverride) {
+    @try {
+        NSMutableArray *cols = [NSMutableArray array];
+        { sqlite3_stmt *pi = NULL;
+          if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL) == SQLITE_OK) {
+            while (sqlite3_step(pi) == SQLITE_ROW) { NSString *c = MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [cols addObject:c]; }
+            sqlite3_finalize(pi); }
+        }
+        if (cols.count == 0) return @"no columns";
+
+        sqlite3_stmt *tr = NULL;
+        NSMutableArray *vals = [NSMutableArray array];
+        BOOL hasTpl = NO;
+        if (sqlite3_prepare_v2(db, "SELECT * FROM threads WHERE thread_key = '1002754957' LIMIT 1", -1, &tr, NULL) == SQLITE_OK) {
+            if (sqlite3_step(tr) == SQLITE_ROW) {
+                hasTpl = YES;
+                for (NSUInteger i = 0; i < cols.count && i < (NSUInteger)sqlite3_column_count(tr); i++) {
+                    int ct = sqlite3_column_type(tr, (int)i);
+                    if (ct == SQLITE_NULL) [vals addObject:[NSNull null]];
+                    else [vals addObject:[NSString stringWithFormat:@"%s", sqlite3_column_text(tr, (int)i)]];
+                }
+            }
+            sqlite3_finalize(tr);
+        }
+        if (!hasTpl || vals.count != cols.count) return @"template row missing";
+
+        long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+        NSString *snip = snippetOverride ?: [NSString stringWithFormat:@"[repaired] %@", threadId];
+        NSDictionary *override = @{
+            @"thread_key": threadId,
+            @"folder_name": @"inbox",
+            @"thread_picture_url_fallback": [NSString stringWithFormat:@"/messaging/lightspeed/media_fallback/?entity_id=%@&entity_type=10&width=300&height=300", threadId],
+            @"snippet": snip,
+            @"snippet_sender_contact_id": threadId,
+            @"last_activity_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
+            @"last_read_watermark_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
+            @"draft_message": [NSNull null],
+            @"normalized_search_terms": [NSNull null],
+            @"consistent_thread_fbid": [NSNull null],
+            @"redirect_to_thread_key": [NSNull null]
+        };
+
+        NSMutableString *cSql = [NSMutableString string];
+        NSMutableString *vSql = [NSMutableString string];
+        for (NSUInteger i = 0; i < cols.count; i++) {
+            NSString *c = cols[i];
+            [cSql appendFormat:@"%s%s", c.UTF8String, (i + 1 < cols.count) ? "," : ""];
+            if (override[c] != nil) {
+                id ov = override[c];
+                if ([ov isKindOfClass:[NSNull class]]) [vSql appendString:@"NULL"];
+                else [vSql appendFormat:@"'%@'", MI_esc(ov)];
+            } else if ([vals[i] isKindOfClass:[NSNull class]]) {
+                [vSql appendString:@"NULL"];
+            } else {
+                [vSql appendFormat:@"'%@'", MI_esc(vals[i])];
+            }
+            if (i + 1 < cols.count) [vSql appendString:@","];
+        }
+        NSString *sql = [NSString stringWithFormat:@"INSERT OR REPLACE INTO threads (%@) VALUES (%@)", cSql, vSql];
+        char *err = NULL;
+        BOOL ok = sqlite3_exec(db, sql.UTF8String, NULL, NULL, &err) == SQLITE_OK;
+        if (err) sqlite3_free(err);
+        return ok ? nil : [NSString stringWithFormat:@"SQL error: %s", err ? err : "?"];
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"exc: %@", e.reason];
+    }
+}
+
 static void MI_hRepairRow(NSString *threadId) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
@@ -1710,76 +1780,9 @@ static void MI_hRepairRow(NSString *threadId) {
                 MI_postResult(@"progress", @"repair: open failed"); if (db) sqlite3_close(db); return;
             }
             sqlite3_busy_timeout(db, 5000);
-
-            // column list
-            NSMutableArray *cols = [NSMutableArray array];
-            { sqlite3_stmt *pi = NULL;
-              if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL) == SQLITE_OK) {
-                while (sqlite3_step(pi) == SQLITE_ROW) { NSString *c = MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [cols addObject:c]; }
-                sqlite3_finalize(pi); }
-            }
-            if (cols.count == 0) { MI_postResult(@"progress", @"repair: no columns"); sqlite3_close(db); return; }
-
-            // read template row (em kè) fully
-            sqlite3_stmt *tr = NULL;
-            NSString *tq = @"SELECT * FROM threads WHERE thread_key = '1002754957' LIMIT 1";
-            NSMutableArray *vals = [NSMutableArray array]; // NSString or NSNull
-            BOOL hasTpl = NO;
-            if (sqlite3_prepare_v2(db, tq.UTF8String, -1, &tr, NULL) == SQLITE_OK) {
-                if (sqlite3_step(tr) == SQLITE_ROW) {
-                    hasTpl = YES;
-                    for (NSUInteger i = 0; i < cols.count && i < (NSUInteger)sqlite3_column_count(tr); i++) {
-                        int ct = sqlite3_column_type(tr, (int)i);
-                        if (ct == SQLITE_NULL) [vals addObject:[NSNull null]];
-                        else [vals addObject:[NSString stringWithFormat:@"%s", sqlite3_column_text(tr, (int)i)]];
-                    }
-                }
-                sqlite3_finalize(tr);
-            }
-            if (!hasTpl || vals.count != cols.count) {
-                MI_postResult(@"progress", @"repair: template row missing");
-                sqlite3_close(db); return;
-            }
-
-            long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
-            NSDictionary *override = @{
-                @"thread_key": threadId,
-                @"folder_name": @"inbox",
-                @"thread_picture_url_fallback": [NSString stringWithFormat:@"/messaging/lightspeed/media_fallback/?entity_id=%@&entity_type=10&width=300&height=300", threadId],
-                @"snippet": [NSString stringWithFormat:@"[repaired] %@", threadId],
-                @"snippet_sender_contact_id": threadId,
-                @"last_activity_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
-                @"last_read_watermark_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
-                @"draft_message": [NSNull null],
-                @"normalized_search_terms": [NSNull null],
-                @"consistent_thread_fbid": [NSNull null],
-                @"redirect_to_thread_key": [NSNull null]
-            };
-
-            NSMutableString *cSql = [NSMutableString string];
-            NSMutableString *vSql = [NSMutableString string];
-            for (NSUInteger i = 0; i < cols.count; i++) {
-                NSString *c = cols[i];
-                [cSql appendFormat:@"%s%s", c.UTF8String, (i + 1 < cols.count) ? "," : ""];
-                if (override[c] != nil) {
-                    id ov = override[c];
-                    if ([ov isKindOfClass:[NSNull class]]) [vSql appendString:@"NULL"];
-                    else [vSql appendFormat:@"'%@'", MI_esc(ov)];
-                } else if ([vals[i] isKindOfClass:[NSNull class]]) {
-                    [vSql appendString:@"NULL"];
-                } else {
-                    [vSql appendFormat:@"'%@'", MI_esc(vals[i])];
-                }
-                if (i + 1 < cols.count) [vSql appendString:@","];
-            }
-            NSString *sql = [NSString stringWithFormat:@"INSERT OR REPLACE INTO threads (%@) VALUES (%@)", cSql, vSql];
-            char *err = NULL;
-            BOOL ok = sqlite3_exec(db, sql.UTF8String, NULL, NULL, &err) == SQLITE_OK;
-            NSString *msg = ok ? [NSString stringWithFormat:@"repair done: full-fidelity row cloned for %@ (relaunch + check)", threadId]
-                               : [NSString stringWithFormat:@"repair SQL error: %s", err ? err : "?"];
-            if (err) sqlite3_free(err);
+            NSString *msg = MI_repairRowCore(db, threadId, nil);
             sqlite3_close(db);
-            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", msg); });
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", msg ?: @"repair done"); });
         } @catch (NSException *e) { MI_postResult(@"progress", [NSString stringWithFormat:@"repair exc: %@", e.reason]); }
     });
 }
@@ -2343,6 +2346,16 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     cmDel = sqlite3_changes(db);
                 } else if (dcErr) { sqlite3_free(dcErr); }
                 [report appendFormat:@"deep clean: %d client row(s) purged\n", cmDel];
+
+            // Full-fidelity sync-row clone: heals rows destroyed by earlier builds.
+            {
+                NSDictionary *lm = messages.lastObject;
+                NSString *lt = lm[@"t"] ?: @"";
+                BOOL im = [lm[@"s"] isEqualToString:@"me"];
+                NSString *snip2 = im ? [NSString stringWithFormat:@"You: %@", lt] : lt;
+                NSString *repMsg = MI_repairRowCore(db, threadId, snip2);
+                [report appendFormat:@"row repair: %@\n", repMsg ?: @"cloned OK"];
+            }
             }
 
             // Step 7: INSERT messages
