@@ -368,7 +368,7 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     howto.textColor = [UIColor secondaryLabelColor];
     howto.backgroundColor = [UIColor secondarySystemBackgroundColor];
     howto.layer.cornerRadius = 10;
-    howto.text = @"HOW TO USE\n\n1. TrollFools > Messenger > inject NEWEST dylib\n2. Open Messenger once\n3. Here: search + pick a person\n4. Write messages > APPLY\n5. Kill Messenger, reopen - check chat\n\nList preview may revert on sync.\nUse Refresh if chats don't load.";
+    howto.text = @"BEST RESULTS - follow exactly:\n\n1. TrollFools: inject dylib (kills Messenger)\n2. Open Messenger, wait 3s, inject here IMMEDIATELY\n   (before sync finishes = preview sticks longest)\n3. Pick person, write messages, APPLY\n4. Check the list now - your text shows\n\nPREVIEW PERSISTS while a chat stays quiet.\nIt reverts when that chat gets server activity\n(new msgs/receipts). Archive the chat to keep\nit indefinitely. Re-inject anytime to refresh.";
     howto.translatesAutoresizingMaskIntoConstraints = NO;
     [stack addArrangedSubview:self.statusLabel];
     [stack addArrangedSubview:howto];
