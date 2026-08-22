@@ -2211,6 +2211,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
+            MI_probeStores(db, threadId, threadPk, report);
+
             // CRITICAL: the main .db file rewrite (TRUNCATE) is what triggers
             // Messenger to rebuild its thread list from the DB. A blocked
             // checkpoint means no file change -> stale list. Retry aggressively
