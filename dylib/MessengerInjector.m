@@ -72,6 +72,7 @@ static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
+static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 static NSString *const kNotifyClasses = @"com.messenger.injector.classes";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
@@ -239,6 +240,7 @@ static void MI_hSniff(NSString *threadId);
 static void MI_hMark(NSString *threadId);
 static void MI_hRepairRow(NSString *threadId);
 static void MI_hDumpClasses(NSString *filter);
+static void MI_hDumpIvars(void);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
@@ -1830,6 +1832,66 @@ static void MI_hDumpClasses(NSString *filter) {
     });
 }
 
+// ---- Memory-layer discovery: capture thread-summary cache + dump ivars ----
+static id g_summaryCache = nil;
+static BOOL g_cacheSwizzled = NO;
+
+static void MI_InstallCacheCapture(void) {
+    if (g_cacheSwizzled) return;
+    Class cls = NSClassFromString(@"MNThreadSummaryCache");
+    if (!cls) return;
+    SEL sel = NSSelectorFromString(@"threadSummaryForThreadKey:");
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    IMP origIMP = method_getImplementation(m);
+    id (*origFn)(id, SEL, id) = (id (*)(id, SEL, id))origIMP;
+    __block IMP origBlockIMP = NULL;
+    IMP newIMP = imp_implementationWithBlock(^id(id self, id threadKey) {
+        g_summaryCache = self;
+        return origFn(self, sel, threadKey);
+    });
+    origBlockIMP = newIMP; // keep alive
+    method_setImplementation(m, newIMP);
+    g_cacheSwizzled = YES;
+}
+
+static void MI_hDumpIvars(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSMutableString *r = [NSMutableString string];
+            MI_InstallCacheCapture();
+            [r appendFormat:@"cache captured: %@\n", g_summaryCache ? @"YES" : @"not yet - open Messenger chat list first"];
+
+            NSArray *names = @[@"MNThreadSummaryCache", @"FBMThreadSummary", @"FBMThreadSnippet",
+                               @"FBStringWithRedactedDescription", @"FBMThread"];
+            for (NSString *nm in names) {
+                Class c = NSClassFromString(nm);
+                if (!c) { [r appendFormat:@"\n[%@] MISSING\n", nm]; continue; }
+                unsigned int ic = 0;
+                Ivar *iv = class_copyIvarList(c, &ic);
+                NSMutableString *ivs = [NSMutableString string];
+                for (unsigned int i = 0; i < ic && i < 40; i++) {
+                    const char *t = ivar_getTypeEncoding(iv[i]);
+                    NSString *tn = @"?";
+                    if (t && t[0] == '@') tn = @"id";
+                    else if (t && strchr("qQlLiI", t[0])) tn = @"int";
+                    else if (t && t[0] == 'c') tn = @"bool";
+                    else if (t && t[0] == 'f') tn = @"float";
+                    else if (t && t[0] == 'd') tn = @"double";
+                    else if (t && t[0] == 'B') tn = @"bool";
+                    [ivs appendFormat:@"%s(%@) ", ivar_getName(iv[i]), tn];
+                }
+                free(iv);
+                [r appendFormat:@"\n[%@]\n ivars: %@\n", nm, ivs];
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
+        } @catch (NSException *e) {
+            MI_postResult(@"progress", [NSString stringWithFormat:@"ivars exc: %@", e.reason]);
+        }
+    });
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2918,6 +2980,8 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hMark(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"mark obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyRepair object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hRepairRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"repair obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyIvars object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hDumpIvars(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"ivars obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyClasses object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hDumpClasses(n.userInfo[@"filter"] ?: @"Thread"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"classes obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
