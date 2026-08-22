@@ -2151,10 +2151,10 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         @"sender_contact_pk, send_status, is_hidden, is_tombstoned, is_reply_only, "
                         @"persistent_id, message_content_type, message_creation_type, primary_sort_key, "
                         @"should_bump_thread, resonance_offline_threading_id) "
-                        @"VALUES (%lld, %lld, %lld, %lld, '%@', 0, "
+                        @"VALUES (%lld, %lld, -1, %lld, '%@', 0, "
                         @"%lld, 2, 0, 0, 0, "
                         @"'%@', 0, 5, %lld, 1, %lld)",
-                        threadPk, ts, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
+                        threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
                     char *err2 = NULL;
                     int rc2 = sqlite3_exec(db, clientSql.UTF8String, NULL, NULL, &err2);
                     if (rc2 == SQLITE_OK) {
@@ -2225,6 +2225,36 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 } else {
                     [report appendFormat:@"client_threads UPDATE error: %s\n", upErr ? upErr : "?"];
                     if (upErr) sqlite3_free(upErr);
+                }
+            }
+
+            // Widen validity floor: -1 sort_order rows become in-range.
+            // Bounds tweak only - messages themselves untouched.
+            {
+                char *er = NULL;
+                NSString *rq = [NSString stringWithFormat:
+                    @"UPDATE client_messages_ranges SET min_message_sort_order = -1 "
+                    @"WHERE thread_pk = %lld AND min_message_sort_order > -1", threadPk];
+                if (sqlite3_exec(db, rq.UTF8String, NULL, NULL, &er) == SQLITE_OK) {
+                    [report appendFormat:@"range floor widened (%d row(s))
+", sqlite3_changes(db)];
+                    if (sqlite3_changes(db) == 0) {
+                        er = NULL;
+                        NSString *iq = [NSString stringWithFormat:
+                            @"INSERT OR IGNORE INTO client_messages_ranges "
+                             "(thread_pk, min_message_sort_order, min_message_pk, has_more_before, "
+                             "max_message_sort_order, max_message_pk, has_more_after, is_loading_before, is_loading_after) "
+                             "VALUES (%lld, -1, -1, 0, 9223372036854775807, -1, 0, 0, 0)", threadPk];
+                        if (sqlite3_exec(db, iq.UTF8String, NULL, NULL, &er) == SQLITE_OK)
+                            [report appendFormat:@"ranges row created (%d)
+", sqlite3_changes(db)];
+                        else { [report appendFormat:@"ranges INSERT error: %s
+", er ? er : "?"]; if (er) sqlite3_free(er); }
+                    }
+                } else {
+                    [report appendFormat:@"range UPDATE error: %s
+", er ? er : "?"];
+                    if (er) sqlite3_free(er);
                 }
             }
 
