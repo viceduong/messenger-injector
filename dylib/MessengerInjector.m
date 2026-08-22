@@ -1848,22 +1848,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             MI_progress([NSString stringWithFormat:@"inject: maxMsgId=%lld colType=%d", maxMsgId, msgIdColType]);
             [report appendFormat:@"Max existing message_id: %lld (type: %@)\n", maxMsgId, msgIdColType ? @"TEXT" : @"INTEGER"];
 
-            // Step 5: Get column names from messages table
-            MI_progress(@"inject: getting columns");
-            NSMutableArray<NSString *> *msgCols = [NSMutableArray array];
-            {
-                sqlite3_stmt *s = NULL;
-                if (sqlite3_prepare_v2(db, "SELECT * FROM messages LIMIT 1", -1, &s, NULL) == SQLITE_OK) {
-                    int cc = sqlite3_column_count(s);
-                    for (int c = 0; c < cc; c++) {
-                        [msgCols addObject:@(sqlite3_column_name(s, c))];
-                    }
-                    sqlite3_finalize(s);
-                }
-            }
-            [report appendFormat:@"Columns: %@\n", [msgCols componentsJoinedByString:@", "]];
-            MI_progress([NSString stringWithFormat:@"inject: columns=%@", [msgCols componentsJoinedByString:@","]]);
-
             // Step 6: Resolve thread_pk — RESEARCH BUILD
             // Strategy: test the offline_threading_id bridge on clean data and
             // VALIDATE it against a known-correct data point before trusting it.
