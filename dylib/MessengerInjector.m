@@ -2254,7 +2254,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             sqlite3_close(db);
-            [report appendFormat:@"\n=== Result v3.3: %d inserted, %d errors ===\n", inserted, errors];
+            [report appendFormat:@"\n=== Result v3.6: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
 
             // Machine-readable result line (helper parses this for the plain-English banner)
@@ -2695,7 +2695,7 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hListFiles(); } @catch (NSException *e) {} }];
 
         [dnc postNotificationName:kNotifyReady object:nil
-            userInfo:@{@"dylib":@"MessengerInjector",@"version":@"3.3"}
+            userInfo:@{@"dylib":@"MessengerInjector",@"version":@"3.6"}
             deliverImmediately:YES];
         MI_progress(@"ctor: v2.0 ready — send, dump, findDB, schema, sample, threads, inject, crashLog");
     });
