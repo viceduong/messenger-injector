@@ -1879,7 +1879,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 if (clErr) { [report appendFormat:@"cleanup error: %s\n", clErr]; sqlite3_free(clErr); }
                 if (msgDel > 0) [report appendFormat:@"cleanup: removed %d old test rows from messages\n", msgDel];
             }
-            }
 
             long long threadPk = 0;
             NSString *pkMethod = @"none";
