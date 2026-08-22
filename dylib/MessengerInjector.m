@@ -2627,24 +2627,24 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         sqlite3_finalize(ts);
                         [report appendString:@"\n"];
                     }
-                    for (NSString *tbl in @[@"thread", @"threads", @"conversation", @"conversations", @"message", @"messages", @"snippet"]) {
+                    for (NSString *tbl in @[@"mdcore_authoritative_store_threads", @"mdcore_authoritative_store_messages"]) {
                         sqlite3_stmt *rs = NULL;
-                        NSString *sq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 2", tbl];
-                        if (sqlite3_prepare_v2(md, sq.UTF8String, -1, &rs, NULL) != SQLITE_OK) continue;
+                        NSString *sq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" ORDER BY rowid DESC LIMIT 3", tbl];
+                        if (sqlite3_prepare_v2(md, sq.UTF8String, -1, &rs, NULL) != SQLITE_OK) { [report appendFormat:@"[MDCore.%@] prepare failed\n", tbl]; continue; }
                         int cc = sqlite3_column_count(rs);
                         NSMutableString *colS = [NSMutableString string];
                         for (int c = 0; c < cc; c++) [colS appendFormat:@"%s ", sqlite3_column_name(rs,c)];
-                        [report appendFormat:@"[MDCore.%@] cols: %@\n", tbl, colS];
+                        [report appendFormat:@"\n[MDCore.%@] cols(%d): %@\n", tbl, cc, colS];
                         int rn = 0;
-                        while (sqlite3_step(rs) == SQLITE_ROW && rn < 2) {
+                        while (sqlite3_step(rs) == SQLITE_ROW && rn < 3) {
                             NSMutableString *rowS = [NSMutableString string];
-                            for (int c = 0; c < cc && c < 10; c++) {
+                            for (int c = 0; c < cc && c < 16; c++) {
                                 int ct = sqlite3_column_type(rs, c);
                                 if (ct == SQLITE_NULL) continue;
                                 NSString *v;
                                 if (ct == SQLITE_TEXT || ct == SQLITE_BLOB) {
                                     v = MI_cstr(sqlite3_column_text(rs,c)) ?: @"";
-                                    if (v.length > 30) v = [v substringToIndex:30];
+                                    if (v.length > 36) v = [v substringToIndex:36];
                                 } else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
                                 [rowS appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
                             }
