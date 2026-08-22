@@ -1511,6 +1511,10 @@ static void MI_hThreadRow(NSString *threadId) {
             sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "actor_id_for_sync_group", -1, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
+            {
+                NSString *pmsg = MI_ProtectTriggers(db, threadId, NO);
+                [report appendFormat:@"protection: %@\n", pmsg ?: @"cleared"];
+            }
 
             long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
 
@@ -2118,7 +2122,7 @@ static void MI_hRestoreHistory(NSString *threadId) {
     });
 }
 
-static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
+static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[0] apply received"); });
@@ -2803,7 +2807,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_
                     sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_FULL, NULL, NULL);
                 }
                 sqlite3_busy_timeout(db, 5000);
-            MI_BumpSchema(db); // force render path to re-read (verified fix)
                 [report appendFormat:@"checkpoint %s (%.1fs)\n", ckrc == SQLITE_OK ? "TRUNCATED" : "partial-FULL", CFAbsoluteTimeGetCurrent() - t0];
             }
             MI_progress(@"inject: WAL checkpoint done");
@@ -2895,6 +2898,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_
                 }
             }
 
+            MI_BumpSchema(db);
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result v3.6: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
