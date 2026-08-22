@@ -2209,13 +2209,23 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            // Force WAL checkpoint so changes are written to main DB file
-            if (variant == 2) {
-                sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
-            } else {
-                sqlite3_busy_timeout(db, 300);
-                sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
+            // CRITICAL: the main .db file rewrite (TRUNCATE) is what triggers
+            // Messenger to rebuild its thread list from the DB. A blocked
+            // checkpoint means no file change -> stale list. Retry aggressively
+            // until it completes; each attempt also flushes more WAL frames.
+            {
+                sqlite3_busy_timeout(db, 250);
+                int ckrc = SQLITE_BUSY;
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+                while ((ckrc = sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL)) != SQLITE_OK
+                       && CFAbsoluteTimeGetCurrent() - t0 < 8.0) {
+                    [NSThread sleepForTimeInterval:0.3];
+                }
+                if (ckrc != SQLITE_OK) {
+                    sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_FULL, NULL, NULL);
+                }
                 sqlite3_busy_timeout(db, 5000);
+                [report appendFormat:@"checkpoint %s (%.1fs)\n", ckrc == SQLITE_OK ? "TRUNCATED" : "partial-FULL", CFAbsoluteTimeGetCurrent() - t0];
             }
             MI_progress(@"inject: WAL checkpoint done");
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
