@@ -1832,29 +1832,6 @@ static void MI_hDumpClasses(NSString *filter) {
     });
 }
 
-// ---- Memory-layer discovery: capture thread-summary cache + dump ivars ----
-static id g_summaryCache = nil;
-static BOOL g_cacheSwizzled = NO;
-
-static void MI_InstallCacheCapture(void) {
-    if (g_cacheSwizzled) return;
-    Class cls = NSClassFromString(@"MNThreadSummaryCache");
-    if (!cls) return;
-    SEL sel = NSSelectorFromString(@"threadSummaryForThreadKey:");
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) return;
-    IMP origIMP = method_getImplementation(m);
-    id (*origFn)(id, SEL, id) = (id (*)(id, SEL, id))origIMP;
-    __block IMP origBlockIMP = NULL;
-    IMP newIMP = imp_implementationWithBlock(^id(id self, id threadKey) {
-        g_summaryCache = self;
-        return origFn(self, sel, threadKey);
-    });
-    origBlockIMP = newIMP; // keep alive
-    method_setImplementation(m, newIMP);
-    g_cacheSwizzled = YES;
-}
-
 static void MI_hDumpIvars(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
