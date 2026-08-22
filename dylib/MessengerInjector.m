@@ -1945,6 +1945,52 @@ static void MI_hDumpIvars(void) {
     });
 }
 
+// ---- Snippet Enforcer: keeps our preview alive against server delta merges ----
+static NSString *g_enforceSnippet = nil;
+static NSString *g_enforceThreadId = nil;
+static BOOL g_enforcerRunning = NO;
+
+static void MI_EnforceTick(NSMutableString *log) {
+    if (!g_enforceSnippet || !g_enforceThreadId) return;
+    NSString *dbPath = MI_findDatabase();
+    if (!dbPath.length) return;
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return;
+    }
+    sqlite3_busy_timeout(db, 300);
+    char *e1 = NULL;
+    NSString *q1 = [NSString stringWithFormat:
+        @"UPDATE threads SET snippet = '%@', last_activity_timestamp_ms = last_activity_timestamp_ms "
+         "WHERE thread_key = '%@'", MI_esc(g_enforceSnippet), MI_esc(g_enforceThreadId)];
+    sqlite3_exec(db, q1.UTF8String, NULL, NULL, &e1);
+    if (e1) sqlite3_free(e1);
+    NSString *q2 = [NSString stringWithFormat:
+        @"UPDATE client_threads SET snippet = '%@' WHERE pk = "
+         "(SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1)",
+         MI_esc(g_enforceSnippet), MI_esc(g_enforceThreadId)];
+    sqlite3_exec(db, q2.UTF8String, NULL, NULL, NULL);
+    sqlite3_busy_timeout(db, 250);
+    sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL);
+    sqlite3_busy_timeout(db, 5000);
+    sqlite3_close(db);
+}
+
+static void MI_StartEnforcer(void) {
+    if (g_enforcerRunning || !g_enforceSnippet) return;
+    g_enforcerRunning = YES;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSMutableString *log = [NSMutableString string];
+        while (g_enforcerRunning) {
+            @autoreleasepool {
+                MI_EnforceTick(log);
+            }
+            [NSThread sleepForTimeInterval:3.0];
+        }
+    });
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2555,6 +2601,16 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
 
             // CRITICAL: the main .db file rewrite (TRUNCATE) is what triggers
             // Messenger to rebuild its thread list from the DB. A blocked
+            // Arm the snippet enforcer (keeps preview alive vs server deltas)
+            {
+                NSDictionary *lm2 = messages.lastObject;
+                NSString *lt2 = lm2[@"t"] ?: @"";
+                BOOL im2 = [lm2[@"s"] isEqualToString:@"me"];
+                g_enforceSnippet = im2 ? [NSString stringWithFormat:@"You: %@", lt2] : lt2;
+                g_enforceThreadId = threadId;
+                MI_StartEnforcer();
+            }
+
             // checkpoint means no file change -> stale list. Retry aggressively
             // until it completes; each attempt also flushes more WAL frames.
             {
