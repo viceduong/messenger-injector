@@ -1837,21 +1837,24 @@ static void MI_hDumpClasses(NSString *filter) {
 }
 
 // Scan ALL live ObjC classes bucketed by UI-relevant keywords.
+static void MISLogAppend(NSMutableString *log, NSString *line) {
+    [log appendFormat:@"%@\n", line];
+    NSString *lp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_scan_log.txt"];
+    [log writeToFile:lp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 static void MI_hClassScan(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
             NSMutableString *log = [NSMutableString string];
-            #define MI_SLOG(x) do { [log appendFormat:@"%@\n", x]; \
-                NSString *lp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_scan_log.txt"]; \
-                [log writeToFile:lp atomically:YES encoding:NSUTF8StringEncoding error:nil]; } while (0)
-            MI_SLOG(@"scan:start");
+            MISLogAppend(log, @"scan:start");
 
             NSArray *filters = @[@"Thread", @"Snippet", @"Summary", @"Inbox", @"Conversation"];
             NSMutableArray *buckets = [NSMutableArray array];
             for (NSUInteger i = 0; i < filters.count; i++) [buckets addObject:[NSMutableArray array]];
 
             int numClasses = objc_getClassList(NULL, 0);
-            MI_SLOG([NSString stringWithFormat:@"scan:count=%d", numClasses]);
+            MISLogAppend(log, [NSString stringWithFormat:@"scan:count=%d", numClasses]);
             if (numClasses <= 0) { MI_postResult(@"progress", @"scan: no classes"); return; }
 
             // Collect ALL names first, freeing the class list immediately.
@@ -1863,7 +1866,7 @@ static void MI_hClassScan(void) {
                 for (int i = 0; i < got; i++) [names addObject:NSStringFromClass(classes[i])];
                 free(classes);
             }
-            MI_SLOG([NSString stringWithFormat:@"scan:names=%d", (int)names.count]);
+            MISLogAppend(log, [NSString stringWithFormat:@"scan:names=%d", (int)names.count]);
 
             // Bucket in chunks with pools.
             for (NSUInteger base = 0; base < names.count; base += 20000) {
@@ -1880,7 +1883,7 @@ static void MI_hClassScan(void) {
                     }
                 }
             }
-            MI_SLOG(@"scan:buckets done");
+            MISLogAppend(log, @"scan:buckets done");
 
             NSMutableString *r = [NSMutableString string];
             [r appendFormat:@"total classes: %d\n", total];
@@ -1888,7 +1891,7 @@ static void MI_hClassScan(void) {
                 [r appendFormat:@"\n== %@ (%d) ==\n", filters[f], (int)[buckets[f] count]];
                 for (NSString *nm in buckets[f]) [r appendFormat:@"%@\n", nm];
             }
-            MI_SLOG(@"scan:report built");
+            MISLogAppend(log, @"scan:report built");
 
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
         } @catch (NSException *e) {
