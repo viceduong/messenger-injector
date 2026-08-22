@@ -1212,8 +1212,7 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
             while (sqlite3_step(tn) == SQLITE_ROW) [allT appendFormat:@"%@ ", MI_cstr(sqlite3_column_text(tn,0)) ?: @""];
             sqlite3_finalize(tn);
         }
-        [r appendFormat:@"ALL TABLES: %@
-", allT];
+        [r appendFormat:@"ALL TABLES: %@\n", allT];
         sqlite3_stmt *ts = NULL;
         NSMutableArray *rt = [NSMutableArray array];
         if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%range%' OR name LIKE '%window%')", -1, &ts, NULL) == SQLITE_OK) {
@@ -2257,9 +2256,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             sqlite3_close(db);
-            [report appendFormat:@"
-=== Result v3.3: %d inserted, %d errors ===
-", inserted, errors];
+            [report appendFormat:@"\n=== Result v3.3: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
 
             // Machine-readable result line (helper parses this for the plain-English banner)
