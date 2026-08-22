@@ -70,6 +70,8 @@ static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
 static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
+static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
+static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 
@@ -233,6 +235,8 @@ static void MI_hThreads(void);
 static void MI_hResearch(NSString *threadId, NSString *mode);
 static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_hSniff(NSString *threadId);
+static void MI_hMark(NSString *threadId);
+static void MI_hRepairRow(NSString *threadId);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
@@ -1665,6 +1669,117 @@ static void MI_probeStores(sqlite3 *db, NSString *threadId, long long threadPk, 
     }
 }
 
+// Write marker snippet into existing sync threads row (decisive render test).
+static void MI_hMark(NSString *threadId) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_postResult(@"progress", @"mark: no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                MI_postResult(@"progress", @"mark: open failed"); if (db) sqlite3_close(db); return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+            char *err = NULL;
+            NSString *q = [NSString stringWithFormat:@"UPDATE threads SET snippet = 'ZZTESTMARK-%@' WHERE thread_key = '%@'", [[NSUUID UUID] UUIDString], threadId];
+            BOOL ok = sqlite3_exec(db, q.UTF8String, NULL, NULL, &err) == SQLITE_OK;
+            int ch = ok ? sqlite3_changes(db) : 0;
+            NSString *msg = ok ? [NSString stringWithFormat:@"mark written (%d row(s)) - relaunch + check preview", ch]
+                               : [NSString stringWithFormat:@"mark failed: %s", err ? err : "?"];
+            if (err) sqlite3_free(err);
+            sqlite3_close(db);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", msg); });
+        } @catch (NSException *e) { MI_postResult(@"progress", [NSString stringWithFormat:@"mark exc: %@", e.reason]); }
+    });
+}
+
+// Rebuild the target's sync threads row as a FULL-FIDELITY clone of a healthy
+// chat row (em kè template), with target-specific overrides. Heals rows that
+// were destroyed by earlier INSERT OR REPLACE runs.
+static void MI_hRepairRow(NSString *threadId) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_postResult(@"progress", @"repair: no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                MI_postResult(@"progress", @"repair: open failed"); if (db) sqlite3_close(db); return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+
+            // column list
+            NSMutableArray *cols = [NSMutableArray array];
+            { sqlite3_stmt *pi = NULL;
+              if (sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &pi, NULL) == SQLITE_OK) {
+                while (sqlite3_step(pi) == SQLITE_ROW) { NSString *c = MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [cols addObject:c]; }
+                sqlite3_finalize(pi); }
+            }
+            if (cols.count == 0) { MI_postResult(@"progress", @"repair: no columns"); sqlite3_close(db); return; }
+
+            // read template row (em kè) fully
+            sqlite3_stmt *tr = NULL;
+            NSString *tq = @"SELECT * FROM threads WHERE thread_key = '1002754957' LIMIT 1";
+            NSMutableArray *vals = [NSMutableArray array]; // NSString or NSNull
+            BOOL hasTpl = NO;
+            if (sqlite3_prepare_v2(db, tq.UTF8String, -1, &tr, NULL) == SQLITE_OK) {
+                if (sqlite3_step(tr) == SQLITE_ROW) {
+                    hasTpl = YES;
+                    for (NSUInteger i = 0; i < cols.count && i < (NSUInteger)sqlite3_column_count(tr); i++) {
+                        int ct = sqlite3_column_type(tr, (int)i);
+                        if (ct == SQLITE_NULL) [vals addObject:[NSNull null]];
+                        else [vals addObject:[NSString stringWithFormat:@"%s", sqlite3_column_text(tr, (int)i)]];
+                    }
+                }
+                sqlite3_finalize(tr);
+            }
+            if (!hasTpl || vals.count != cols.count) {
+                MI_postResult(@"progress", @"repair: template row missing");
+                sqlite3_close(db); return;
+            }
+
+            long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+            NSDictionary *override = @{
+                @"thread_key": threadId,
+                @"folder_name": @"inbox",
+                @"thread_picture_url_fallback": [NSString stringWithFormat:@"/messaging/lightspeed/media_fallback/?entity_id=%@&entity_type=10&width=300&height=300", threadId],
+                @"snippet": [NSString stringWithFormat:@"[repaired] %@", threadId],
+                @"snippet_sender_contact_id": threadId,
+                @"last_activity_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
+                @"last_read_watermark_timestamp_ms": [NSString stringWithFormat:@"%lld", now],
+                @"draft_message": [NSNull null],
+                @"normalized_search_terms": [NSNull null],
+                @"consistent_thread_fbid": [NSNull null],
+                @"redirect_to_thread_key": [NSNull null]
+            };
+
+            NSMutableString *cSql = [NSMutableString string];
+            NSMutableString *vSql = [NSMutableString string];
+            for (NSUInteger i = 0; i < cols.count; i++) {
+                NSString *c = cols[i];
+                [cSql appendFormat:@"\"%@"%s", c, (i + 1 < cols.count) ? "," : ""];
+                if (override[c] != nil) {
+                    id ov = override[c];
+                    if ([ov isKindOfClass:[NSNull class]]) [vSql appendString:@"NULL"];
+                    else [vSql appendFormat:@"'%@'", MI_esc(ov)];
+                } else if ([vals[i] isKindOfClass:[NSNull class]]) {
+                    [vSql appendString:@"NULL"];
+                } else {
+                    [vSql appendFormat:@"'%@'", MI_esc(vals[i])];
+                }
+                if (i + 1 < cols.count) [vSql appendString:@","];
+            }
+            NSString *sql = [NSString stringWithFormat:@"INSERT OR REPLACE INTO threads (%@) VALUES (%@)", cSql, vSql];
+            char *err = NULL;
+            BOOL ok = sqlite3_exec(db, sql.UTF8String, NULL, NULL, &err) == SQLITE_OK;
+            NSString *msg = ok ? [NSString stringWithFormat:@"repair done: full-fidelity row cloned for %@ (relaunch + check)", threadId]
+                               : [NSString stringWithFormat:@"repair SQL error: %s", err ? err : "?"];
+            if (err) sqlite3_free(err);
+            sqlite3_close(db);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", msg); });
+        } @catch (NSException *e) { MI_postResult(@"progress", [NSString stringWithFormat:@"repair exc: %@", e.reason]); }
+    });
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2749,6 +2864,10 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hResearch(n.userInfo[@"threadId"] ?: @"", n.userInfo[@"mode"] ?: @"map"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"research: %@", e.name]); } }];
         [dnc addObserverForName:kNotifySniff object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hSniff(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"sniff obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyMark object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hMark(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"mark obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyRepair object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hRepairRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"repair obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hThreadRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"syncrow obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]
