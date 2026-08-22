@@ -1219,6 +1219,9 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
             while (sqlite3_step(ts) == SQLITE_ROW) { NSString *n = MI_cstr(sqlite3_column_text(ts,0)); if (n.length > 0) [rt addObject:n]; }
             sqlite3_finalize(ts);
         }
+        [rt addObjectsFromArray:@[@"client_messages_ranges", @"inbox_threads_ranges",
+                                  @"filtered_threads_ranges_v3__generated", @"local_thread_persistence_store",
+                                  @"inbox_folder_metadata", @"mailbox_metadata"]];
         for (NSString *tbl in rt) {
             sqlite3_stmt *rs = NULL;
             NSString *rq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 4", tbl];
@@ -1227,10 +1230,10 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
                 int rn = 0;
                 while (sqlite3_step(rs) == SQLITE_ROW && rn < 4) {
                     NSMutableString *row = [NSMutableString string];
-                    for (int c = 0; c < cc && c < 10; c++) {
+                    for (int c = 0; c < cc && c < 12; c++) {
                         NSString *v;
                         if (sqlite3_column_type(rs, c) == SQLITE_NULL) v = @"N";
-                        else if (sqlite3_column_type(rs, c) == SQLITE_TEXT) { v = MI_cstr(sqlite3_column_text(rs,c)) ?: @""; if (v.length > 16) v = [v substringToIndex:16]; }
+                        else if (sqlite3_column_type(rs, c) == SQLITE_TEXT) { v = MI_cstr(sqlite3_column_text(rs,c)) ?: @""; if (v.length > 20) v = [v substringToIndex:20]; }
                         else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
                         [row appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
                     }
@@ -1238,6 +1241,7 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
                     rn++;
                 }
                 sqlite3_finalize(rs);
+                if (rn == 0) [r appendFormat:@"[range %@] EMPTY\n", tbl];
             }
         }
     }
@@ -1590,10 +1594,11 @@ static void MI_compareRealVsInjected(sqlite3 *db, NSMutableString *r) {
     // newest real message (from other party) vs newest injected (local, recent ts)
     const char *queries[2] = {
         "SELECT * FROM client_messages WHERE thread_pk = 410725001 AND sender_contact_pk = 1002754957 AND text IS NOT NULL ORDER BY authoritative_ts_ms DESC LIMIT 1",
-        "SELECT * FROM client_messages WHERE thread_pk = 410725001 AND sender_contact_pk = 100003506470529 AND authoritative_ts_ms > 1700000000000 ORDER BY authoritative_ts_ms DESC LIMIT 1"
+        "SELECT * FROM client_messages WHERE thread_pk = 410725001 AND sender_contact_pk = 100003506470529 AND authoritative_ts_ms > 1700000000000 ORDER BY authoritative_ts_ms DESC LIMIT 1",
+        "SELECT * FROM client_messages WHERE sender_contact_pk = 100003506470529 AND authoritative_ts_ms > 1787000000000 ORDER BY authoritative_ts_ms DESC LIMIT 1"
     };
-    const char *labels[2] = { "REAL", "OURS" };
-    for (int qi = 0; qi < 2; qi++) {
+    const char *labels[3] = { "REAL(emke)", "OURS-old-scrubbed", "OURS-newest-any-thread" };
+    for (int qi = 0; qi < 3; qi++) {
         sqlite3_stmt *st = NULL;
         if (sqlite3_prepare_v2(db, queries[qi], -1, &st, NULL) != SQLITE_OK) continue;
         if (sqlite3_step(st) == SQLITE_ROW) {
