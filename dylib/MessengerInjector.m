@@ -2118,7 +2118,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         @"should_bump_thread, resonance_offline_threading_id) "
                         @"VALUES (%lld, %lld, -1, %lld, '%@', 0, "
                         @"%lld, 2, 0, 0, 0, "
-                        @"'%@', 0, 6, %lld, 1, %lld)",
+                        @"'%@', 0, 5, %lld, 1, %lld)",
                         threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
                     char *err2 = NULL;
                     int rc2 = sqlite3_exec(db, clientSql.UTF8String, NULL, NULL, &err2);
