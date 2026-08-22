@@ -236,6 +236,7 @@ static void MI_hSniff(NSString *threadId);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
+static void MI_compareRealVsInjected(sqlite3 *db, NSMutableString *r);
 static void MI_postResult(NSString *tag, NSString *text);
 
 // ============================================================
@@ -1545,6 +1546,40 @@ static void MI_hThreadRow(NSString *threadId) {
     });
 }
 
+// Dump ALL non-null columns of one REAL vs one INJECTED message (em kè GT
+// thread has both). Any systematic difference = the field the UI filters on.
+static void MI_compareRealVsInjected(sqlite3 *db, NSMutableString *r) {
+    const char *gtPk = "410725001";
+    // newest real message (from other party) vs newest injected (local, recent ts)
+    const char *queries[2] = {
+        "SELECT * FROM client_messages WHERE thread_pk = 410725001 AND sender_contact_pk = 1002754957 AND text IS NOT NULL ORDER BY authoritative_ts_ms DESC LIMIT 1",
+        "SELECT * FROM client_messages WHERE thread_pk = 410725001 AND sender_contact_pk = 100003506470529 AND authoritative_ts_ms > 1700000000000 ORDER BY authoritative_ts_ms DESC LIMIT 1"
+    };
+    const char *labels[2] = { "REAL", "OURS" };
+    for (int qi = 0; qi < 2; qi++) {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, queries[qi], -1, &st, NULL) != SQLITE_OK) continue;
+        if (sqlite3_step(st) == SQLITE_ROW) {
+            int cc = sqlite3_column_count(st);
+            [r appendFormat:@"--- %s client_messages ---\n", labels[qi]];
+            for (int c = 0; c < cc; c++) {
+                if (sqlite3_column_type(st, c) == SQLITE_NULL) continue;
+                const char *cn = sqlite3_column_name(st, c);
+                NSString *val;
+                int ct = sqlite3_column_type(st, c);
+                if (ct == SQLITE_TEXT || ct == SQLITE_BLOB) {
+                    val = MI_cstr(sqlite3_column_text(st, c)) ?: @"";
+                    if (val.length > 28) val = [val substringToIndex:28];
+                } else {
+                    val = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(st, c)];
+                }
+                [r appendFormat:@"%s=%@\n", cn, val];
+            }
+        }
+        sqlite3_finalize(st);
+    }
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2160,6 +2195,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
 
             MI_sniffInto(db, threadId, threadPk, report);
             MI_threadRowInto(db, threadId, report);
+            MI_compareRealVsInjected(db, report);
 
             // v2.8 technique (proven: archived-list success) - for chats WITH an
             // existing sync row, write our snippet into the sync layer itself.
