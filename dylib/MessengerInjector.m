@@ -2619,6 +2619,47 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 report = [NSMutableString stringWithFormat:@"%@\n[...truncated %ld chars - full log via Research...]\n", head, (long)(report.length - 1800)];
             }
 
+            // Pending-send pipeline recon: schema + samples of the offline send store.
+            {
+                NSArray *tbls = @[@"local_message_persistence_store_pending_payload",
+                                  @"local_message_persistence_store_sequences_v2",
+                                  @"mailbox_pending_send_tasks"];
+                for (NSString *tbl in tbls) {
+                    sqlite3_stmt *pi = NULL;
+                    NSMutableArray *cn = [NSMutableArray array];
+                    NSString *pq = [NSString stringWithFormat:@"PRAGMA table_info(\"%@\")", tbl];
+                    if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &pi, NULL) != SQLITE_OK) { [r appendFormat:@"[%@] MISSING\n", tbl]; continue; }
+                    while (sqlite3_step(pi) == SQLITE_ROW) { NSString *c = MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [cn addObject:c]; }
+                    sqlite3_finalize(pi);
+                    [r appendFormat:@"[%@] cols=%@\n", tbl, [cn componentsJoinedByString:@","]];
+                    sqlite3_stmt *rs = NULL;
+                    NSString *sq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 2", tbl];
+                    if (sqlite3_prepare_v2(db, sq.UTF8String, -1, &rs, NULL) == SQLITE_OK) {
+                        int cc = sqlite3_column_count(rs);
+                        int rn = 0;
+                        while (sqlite3_step(rs) == SQLITE_ROW && rn < 2) {
+                            NSMutableString *rowS = [NSMutableString string];
+                            for (int c = 0; c < cc && c < 10; c++) {
+                                int ct = sqlite3_column_type(rs, c);
+                                if (ct == SQLITE_NULL) continue;
+                                NSString *v;
+                                int bytes = sqlite3_column_bytes(rs, c);
+                                if (ct == SQLITE_TEXT || ct == SQLITE_BLOB) {
+                                    v = MI_cstr(sqlite3_column_text(rs,c)) ?: @"";
+                                    if ((int)v.length > bytes) v = [v substringToIndex:MAX(0,bytes)];
+                                    if (v.length > 40) v = [[v substringToIndex:40] stringByAppendingString:@"…"];
+                                } else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
+                                [rowS appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
+                            }
+                            [r appendFormat:@"  row: %@\n", rowS];
+                            rn++;
+                        }
+                        if (rn == 0) [r appendFormat:@"  (empty)\n"];
+                        sqlite3_finalize(rs);
+                    }
+                }
+            }
+
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result v3.6: %d inserted, %d errors ===\n", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
@@ -3009,11 +3050,6 @@ static void MI_ctor(void) {
     signal(SIGFPE, MI_signalHandler);
 
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
-
-    // Auto class-scan (per-image variant - crash-safe): map current architecture.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        MI_hClassScan();
-    });
 
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
