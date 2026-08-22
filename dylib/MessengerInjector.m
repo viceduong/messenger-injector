@@ -1511,10 +1511,6 @@ static void MI_hThreadRow(NSString *threadId) {
             sqlite3_create_function(db, "thread_read_status_triggers_enabled", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "thread_read_status_triggers_enabled_v2", 0, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
             sqlite3_create_function(db, "actor_id_for_sync_group", -1, SQLITE_UTF8, NULL, MI_dummy_zero, NULL, NULL);
-            {
-                NSString *pmsg = MI_ProtectTriggers(db, threadId, NO);
-                [report appendFormat:@"protection: %@\n", pmsg ?: @"cleared"];
-            }
 
             long long now = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
 
@@ -2588,7 +2584,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 sqlite3_exec(db, "DELETE FROM mi_ledger_cm", NULL, NULL, NULL);
                 sqlite3_exec(db, "DELETE FROM mi_ledger_m", NULL, NULL, NULL);
                 [report appendFormat:@"deep clean: %d injected client row(s), %d sync row(s) removed\n", cmDel, mDel];
-            }
             }
 
             // Step 7: INSERT messages
