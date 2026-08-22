@@ -1204,6 +1204,37 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
             sqlite3_finalize(st);
         }
     }
+    // Message-range tables: server-declared validity windows per thread
+    {
+        sqlite3_stmt *ts = NULL;
+        NSMutableArray *rt = [NSMutableArray array];
+        if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%range%' OR name LIKE '%window%')", -1, &ts, NULL) == SQLITE_OK) {
+            while (sqlite3_step(ts) == SQLITE_ROW) { NSString *n = MI_cstr(sqlite3_column_text(ts,0)); if (n.length > 0) [rt addObject:n]; }
+            sqlite3_finalize(ts);
+        }
+        for (NSString *tbl in rt) {
+            sqlite3_stmt *rs = NULL;
+            NSString *rq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 4", tbl];
+            if (sqlite3_prepare_v2(db, rq.UTF8String, -1, &rs, NULL) == SQLITE_OK) {
+                int cc = sqlite3_column_count(rs);
+                int rn = 0;
+                while (sqlite3_step(rs) == SQLITE_ROW && rn < 4) {
+                    NSMutableString *row = [NSMutableString string];
+                    for (int c = 0; c < cc && c < 10; c++) {
+                        NSString *v;
+                        if (sqlite3_column_type(rs, c) == SQLITE_NULL) v = @"N";
+                        else if (sqlite3_column_type(rs, c) == SQLITE_TEXT) { v = MI_cstr(sqlite3_column_text(rs,c)) ?: @""; if (v.length > 16) v = [v substringToIndex:16]; }
+                        else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
+                        [row appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
+                    }
+                    [r appendFormat:@"[range %@] %@
+", tbl, row];
+                    rn++;
+                }
+                sqlite3_finalize(rs);
+            }
+        }
+    }
     // EVERY other table with a snippet column, matched to this thread
     {
         sqlite3_stmt *ts = NULL;
