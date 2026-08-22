@@ -2611,6 +2611,56 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 MI_StartEnforcer();
             }
 
+            // MDCore authoritative store probe (E2EE-era message store)
+            {
+                NSString *mdPath = [[NSHomeDirectory()
+                    stringByAppendingPathComponent:@"Library/Application Support/mcm_mdcore/database"]
+                    stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"MDCoreAuthoritativeStoreDatabase_%@.db", localUid]];
+                [report appendFormat:@"\n[MDCore] exists: %@\n", [[NSFileManager defaultManager] fileExistsAtPath:mdPath] ? @"YES" : @"NO"];
+                sqlite3 *md = NULL;
+                if (sqlite3_open_v2(mdPath.UTF8String, &md, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+                    sqlite3_stmt *ts = NULL;
+                    if (sqlite3_prepare_v2(md, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", -1, &ts, NULL) == SQLITE_OK) {
+                        [report appendString:@"[MDCore] tables: "];
+                        while (sqlite3_step(ts) == SQLITE_ROW) [report appendFormat:@"%@ ", MI_cstr(sqlite3_column_text(ts,0)) ?: @"?"];
+                        sqlite3_finalize(ts);
+                        [report appendString:@"\n"];
+                    }
+                    for (NSString *tbl in @[@"thread", @"threads", @"conversation", @"conversations", @"message", @"messages", @"snippet"]) {
+                        sqlite3_stmt *rs = NULL;
+                        NSString *sq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 2", tbl];
+                        if (sqlite3_prepare_v2(md, sq.UTF8String, -1, &rs, NULL) != SQLITE_OK) continue;
+                        int cc = sqlite3_column_count(rs);
+                        NSMutableString *colS = [NSMutableString string];
+                        for (int c = 0; c < cc; c++) [colS appendFormat:@"%s ", sqlite3_column_name(rs,c)];
+                        [report appendFormat:@"[MDCore.%@] cols: %@\n", tbl, colS];
+                        int rn = 0;
+                        while (sqlite3_step(rs) == SQLITE_ROW && rn < 2) {
+                            NSMutableString *rowS = [NSMutableString string];
+                            for (int c = 0; c < cc && c < 10; c++) {
+                                int ct = sqlite3_column_type(rs, c);
+                                if (ct == SQLITE_NULL) continue;
+                                NSString *v;
+                                if (ct == SQLITE_TEXT || ct == SQLITE_BLOB) {
+                                    v = MI_cstr(sqlite3_column_text(rs,c)) ?: @"";
+                                    if (v.length > 30) v = [v substringToIndex:30];
+                                } else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
+                                [rowS appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
+                            }
+                            [report appendFormat:@"  row: %@\n", rowS];
+                            rn++;
+                        }
+                        if (rn == 0) [report appendFormat:@"  (empty)\n"];
+                        sqlite3_finalize(rs);
+                    }
+                    sqlite3_close(md);
+                } else {
+                    [report appendString:@"[MDCore] open failed\n"];
+                }
+            }
+
+            // checkpoint means no file change -> stale list. Retry aggressively
             // checkpoint means no file change -> stale list. Retry aggressively
             // until it completes; each attempt also flushes more WAL frames.
             {
