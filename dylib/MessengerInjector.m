@@ -1206,6 +1206,14 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
     }
     // Message-range tables: server-declared validity windows per thread
     {
+        sqlite3_stmt *tn = NULL;
+        NSMutableString *allT = [NSMutableString string];
+        if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", -1, &tn, NULL) == SQLITE_OK) {
+            while (sqlite3_step(tn) == SQLITE_ROW) [allT appendFormat:@"%@ ", MI_cstr(sqlite3_column_text(tn,0)) ?: @""];
+            sqlite3_finalize(tn);
+        }
+        [r appendFormat:@"ALL TABLES: %@
+", allT];
         sqlite3_stmt *ts = NULL;
         NSMutableArray *rt = [NSMutableArray array];
         if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%range%' OR name LIKE '%window%')", -1, &ts, NULL) == SQLITE_OK) {
@@ -2249,7 +2257,9 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             sqlite3_close(db);
-            [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
+            [report appendFormat:@"
+=== Result v3.3: %d inserted, %d errors ===
+", inserted, errors];
             [report appendString:@"\n⚠️ Kill and reopen Messenger to see new messages (cold start reads fresh DB).\n"];
 
             // Machine-readable result line (helper parses this for the plain-English banner)
@@ -2690,7 +2700,7 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hListFiles(); } @catch (NSException *e) {} }];
 
         [dnc postNotificationName:kNotifyReady object:nil
-            userInfo:@{@"dylib":@"MessengerInjector",@"version":@"2.0"}
+            userInfo:@{@"dylib":@"MessengerInjector",@"version":@"3.3"}
             deliverImmediately:YES];
         MI_progress(@"ctor: v2.0 ready — send, dump, findDB, schema, sample, threads, inject, crashLog");
     });
