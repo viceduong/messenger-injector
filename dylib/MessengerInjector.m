@@ -1447,7 +1447,7 @@ static void MI_threadRowInto(sqlite3 *db, NSString *threadId, NSMutableString *r
 
             char *err = NULL;
             NSString *sql = [NSString stringWithFormat:
-                @"INSERT OR REPLACE INTO threads "
+                @"INSERT INTO threads "
                  "(thread_key, thread_type, folder_name, thread_picture_url_fallback, "
                  "last_activity_timestamp_ms, last_read_watermark_timestamp_ms, remove_watermark_timestamp_ms, "
                  "mute_expire_time_ms, snippet, is_admin_snippet, snippet_sender_contact_id, authority_level, "
@@ -1545,7 +1545,7 @@ static void MI_hThreadRow(NSString *threadId) {
 
             char *err = NULL;
             NSString *sql = [NSString stringWithFormat:
-                @"INSERT OR REPLACE INTO threads "
+                @"INSERT INTO threads "
                  "(thread_key, thread_type, folder_name, thread_picture_url_fallback, "
                  "last_activity_timestamp_ms, last_read_watermark_timestamp_ms, remove_watermark_timestamp_ms, "
                  "mute_expire_time_ms, snippet, is_admin_snippet, snippet_sender_contact_id, authority_level, "
@@ -1677,6 +1677,12 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
             MI_progress(@"inject: DB opened RW, dummy functions registered");
+
+            // A/B experiment: cycle historical write-path variants
+            NSInteger variant = [[NSUserDefaults standardUserDefaults] integerForKey:@"mi_variant"] + 1;
+            if (variant > 3) variant = 1;
+            [[NSUserDefaults standardUserDefaults] setInteger:variant forKey:@"mi_variant"];
+            [report appendFormat:@"\n=== VARIANT %ld ===\n", (long)variant];
 
             NSMutableString *report = [NSMutableString string];
 
@@ -1866,12 +1872,13 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
 
             // 6.0 Safety cleanup: remove any of OUR previously-injected rows.
             // Our generated message_ids contain UUID dashes; real server IDs never do.
-            {
+            if (variant != 3) {
                 char *clErr = NULL;
                 sqlite3_exec(db, "DELETE FROM messages WHERE message_id LIKE '%-%-%-%-%'", NULL, NULL, &clErr);
                 int msgDel = sqlite3_changes(db);
                 if (clErr) { [report appendFormat:@"cleanup error: %s\n", clErr]; sqlite3_free(clErr); }
                 if (msgDel > 0) [report appendFormat:@"cleanup: removed %d old test rows from messages\n", msgDel];
+            }
             }
 
             long long threadPk = 0;
@@ -2184,18 +2191,37 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
+            // v2.8 technique (proven archived-list success): write snippet into
+            // the EXISTING sync-layer row gently - never replaces the row.
+            if (variant == 2) {
+                NSDictionary *lastMsg = messages.lastObject;
+                NSString *lastText2 = lastMsg[@"t"] ?: @"";
+                BOOL lastIsMe = [lastMsg[@"s"] isEqualToString:@"me"];
+                NSString *snip = lastIsMe ? [NSString stringWithFormat:@"You: %@", lastText2] : lastText2;
+                NSString *upd2 = [NSString stringWithFormat:
+                    @"UPDATE threads SET snippet = '%@', snippet_sender_contact_id = '%@', "
+                    @"last_activity_timestamp_ms = %lld WHERE thread_key = '%@'",
+                    MI_esc(snip), lastIsMe ? localUid : threadId, nowMs, MI_esc(threadId)];
+                char *e2 = NULL;
+                if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
+                    [report appendFormat:@"threads (sync) updated (%d row(s))\n", sqlite3_changes(db)];
+                } else {
+                    [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
+                    if (e2) sqlite3_free(e2);
+                }
+            }
+
             // Force WAL checkpoint so changes are written to main DB file
-            // Exact v2.6-era flush (the archived-list-success window).
-            // Short busy timeout prevents the historic indefinite hang;
-            // worst case it returns busy and data stays WAL-committed.
-            {
+            if (variant == 2) {
+                sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
+            } else {
                 sqlite3_busy_timeout(db, 300);
                 sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
                 sqlite3_busy_timeout(db, 5000);
             }
             MI_progress(@"inject: WAL checkpoint done");
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
-            if (threadPk > 0) {
+            if (threadPk > 0 && variant != 3) {
                 NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
                 long long lastTs = nowMs;
                 // Get last inserted client_messages pk
@@ -2230,7 +2256,9 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
 
 
             MI_sniffInto(db, threadId, threadPk, report);
-            // sync-row insert disabled: exact v2.6 replica
+            if (variant == 2) {
+                MI_threadRowInto(db, threadId, report);
+            } // variants 1/3: no sync-row insert (v2.6/v2.0n replica)
             MI_compareRealVsInjected(db, report);
 
 
