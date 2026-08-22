@@ -2159,7 +2159,30 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             MI_sniffInto(db, threadId, threadPk, report);
-            // sync-row insert disabled: reproduce v2.6 exactly (re-enable after A/B)
+            MI_threadRowInto(db, threadId, report);
+
+            // v2.8 technique (proven: archived-list success) - for chats WITH an
+            // existing sync row, write our snippet into the sync layer itself.
+            // Minimal column set only; full-row updates are crash-prone.
+            {
+                NSDictionary *lastMsg = messages.lastObject;
+                NSString *lastText2 = lastMsg[@"t"] ?: @"";
+                BOOL lastIsMe = [lastMsg[@"s"] isEqualToString:@"me"];
+                NSString *snip = lastIsMe ? [NSString stringWithFormat:@"You: %@", lastText2] : lastText2;
+                NSString *upd2 = [NSString stringWithFormat:
+                    @"UPDATE threads SET snippet = '%@', snippet_sender_contact_id = '%@' "
+                    @"WHERE thread_key = '%@'",
+                    MI_esc(snip), lastIsMe ? localUid : threadId, MI_esc(threadId)];
+                char *e2 = NULL;
+                if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
+                    [report appendFormat:@"threads (sync) updated (%d row(s))
+", sqlite3_changes(db)];
+                } else {
+                    [report appendFormat:@"threads UPDATE error: %s
+", e2 ? e2 : "?"];
+                    if (e2) sqlite3_free(e2);
+                }
+            }
 
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
