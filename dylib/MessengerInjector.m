@@ -1706,6 +1706,22 @@ static void MI_hMark(NSString *threadId) {
 // Rebuild the target's sync threads row as a FULL-FIDELITY clone of a healthy
 // chat row (em kè template), with target-specific overrides. Heals rows that
 // were destroyed by earlier INSERT OR REPLACE runs.
+// Schema-cookie bump: forces ALL connections to invalidate prepared
+// statements and re-read the DB. This is the verified mechanism behind
+// the protect->unprotect list fix (create/drop bumps the cookie).
+static void MI_BumpSchema(sqlite3 *db) {
+    char *err = NULL;
+    sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS mi_ledger_cm (pk INTEGER PRIMARY KEY)",
+        NULL, NULL, NULL);
+    sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS mi_ledger_m (message_id TEXT PRIMARY KEY)",
+        NULL, NULL, NULL);
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS mi_touch_idx ON mi_ledger_m(message_id)", NULL, NULL, &err);
+    if (err) sqlite3_free(err);
+    sqlite3_exec(db, "DROP INDEX IF EXISTS mi_touch_idx", NULL, NULL, NULL);
+}
+
 // Core: clone a healthy threads row (em kè template, ~150 cols) for threadId.
 // Returns nil on success, else an error/status message.
 static NSString *MI_repairRowCore(sqlite3 *db, NSString *threadId, NSString *snippetOverride) {
@@ -2787,6 +2803,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_
                     sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_FULL, NULL, NULL);
                 }
                 sqlite3_busy_timeout(db, 5000);
+            MI_BumpSchema(db); // force render path to re-read (verified fix)
                 [report appendFormat:@"checkpoint %s (%.1fs)\n", ckrc == SQLITE_OK ? "TRUNCATED" : "partial-FULL", CFAbsoluteTimeGetCurrent() - t0];
             }
             MI_progress(@"inject: WAL checkpoint done");
