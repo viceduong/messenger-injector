@@ -72,6 +72,7 @@ static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
+static NSString *const kNotifyClasses = @"com.messenger.injector.classes";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 
@@ -237,6 +238,7 @@ static void MI_hInject(NSString *threadId, NSArray *messages);
 static void MI_hSniff(NSString *threadId);
 static void MI_hMark(NSString *threadId);
 static void MI_hRepairRow(NSString *threadId);
+static void MI_hDumpClasses(NSString *filter);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
@@ -1780,6 +1782,54 @@ static void MI_hRepairRow(NSString *threadId) {
     });
 }
 
+// Enumerate ObjC classes whose name matches filter; list their properties.
+// Used to discover Messenger's cached thread model for memory-layer patching.
+static void MI_hDumpClasses(NSString *filter) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSMutableString *r = [NSMutableString string];
+            [r appendFormat:@"=== CLASSES like '%@' ===\n", filter];
+
+            NSMutableArray *hits = [NSMutableArray array];
+            int numClasses = objc_getClassList(NULL, 0);
+            if (numClasses > 0) {
+                Class *classes = (__unsafe_unretained Class *)malloc(sizeof(Class) * numClasses);
+                numClasses = objc_getClassList(classes, numClasses);
+                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:filter options:NSRegularExpressionCaseInsensitive error:NULL];
+                for (int i = 0; i < numClasses; i++) {
+                    NSString *name = NSStringFromClass(classes[i]);
+                    if ([re firstMatchInString:name options:0 range:NSMakeRange(0, name.length)]) {
+                        [hits addObject:name];
+                    }
+                }
+                free(classes);
+            }
+            [r appendFormat:@"matches: %d\n", (int)hits.count];
+
+            // For the top hits, enumerate properties
+            int shown = 0;
+            for (NSString *clsName in hits) {
+                if (shown >= 12) { [r appendFormat:@"...and %d more\n", (int)hits.count - shown]; break; }
+                Class cls = NSClassFromString(clsName);
+                if (!cls) continue;
+                unsigned int count = 0;
+                objc_property_t *props = class_copyPropertyList(cls, &count);
+                NSMutableString *propStr = [NSMutableString string];
+                for (unsigned int i = 0; i < count && i < 25; i++) {
+                    [propStr appendFormat:@"%s ", property_getName(props[i])];
+                }
+                free(props);
+                [r appendFormat:@"\n[%@]\n props: %@\n", clsName, propStr];
+                shown++;
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
+        } @catch (NSException *e) {
+            MI_postResult(@"progress", [NSString stringWithFormat:@"classes exc: %@", e.reason]);
+        }
+    });
+}
+
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
@@ -2868,6 +2918,8 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hMark(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"mark obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyRepair object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hRepairRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"repair obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyClasses object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hDumpClasses(n.userInfo[@"filter"] ?: @"Thread"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"classes obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hThreadRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"syncrow obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]
