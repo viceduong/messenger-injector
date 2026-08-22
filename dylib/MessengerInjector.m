@@ -2033,10 +2033,10 @@ static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm) {
     }
 }
 
-static void MI_hProtect(NSString *threadId, BOOL arm) {
+static void MI_hProtect(NSString *threadIdIn, BOOL arm) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
-            threadId = @"100003563737446"; // locked to Trinh Duc Linh per request
+            NSString *threadId = @"100003563737446"; // locked to Trinh Duc Linh per request
             NSString *dbPath = MI_findDatabase();
             if (!dbPath.length) { MI_postResult(@"progress", @"protect: no DB"); return; }
             sqlite3 *db = NULL;
