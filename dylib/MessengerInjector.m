@@ -1836,7 +1836,6 @@ static void MI_hDumpIvars(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
             NSMutableString *r = [NSMutableString string];
-            [r appendFormat:@"cache captured: %@\n", g_summaryCache ? @"YES" : @"not yet - open Messenger chat list first"];
 
             NSArray *names = @[@"MNThreadSummaryCache", @"FBMThreadSummary", @"FBMThreadSnippet",
                                @"FBStringWithRedactedDescription", @"FBMThread"];
