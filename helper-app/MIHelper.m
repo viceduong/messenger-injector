@@ -49,6 +49,9 @@ static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
+static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
+static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
+static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 
 // ============================================================
 // One message row: [Me|Them] [text] [min ago] [delete]
@@ -316,6 +319,8 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     UIButton *rescanBtn = [self makeBtn:@"\U0001F504  Refresh" bg:[UIColor systemTealColor] act:@selector(rescanTapped) h:40];
     UIButton *researchBtn = [self makeBtn:@"\U0001F52C  Lookup info" bg:[UIColor systemIndigoColor] act:@selector(researchTapped) h:40];
     UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Inspect data" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
+    UIButton *diagBtn = [self makeBtn:@"\U0001F4CA  Diagnostics" bg:[UIColor systemIndigoColor] act:@selector(diagnosticsTapped) h:40];
+    diagBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Scan cache" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
     sniffBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     self.needleField = [[UITextField alloc] init];
@@ -340,6 +345,7 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     [self.debugStack addArrangedSubview:rescanBtn];
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
+    [self.debugStack addArrangedSubview:diagBtn];
     [self.debugStack addArrangedSubview:sniffBtn];
     [self.debugStack addArrangedSubview:self.needleField];
     [self.debugStack addArrangedSubview:trowBtn];
@@ -353,6 +359,19 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 
     // ---------- assemble ----------
     [stack addArrangedSubview:self.statusLabel];
+    // ---------- How-to card ----------
+    UITextView *howto = [[UITextView alloc] init];
+    howto.editable = NO;
+    howto.scrollEnabled = NO;
+    howto.font = [UIFont systemFontOfSize:12.5];
+    howto.textColor = [UIColor secondaryLabelColor];
+    howto.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    howto.layer.cornerRadius = 10;
+    howto.text = @"HOW TO USE\n\n1. TrollFools > Messenger > inject NEWEST dylib\n2. Open Messenger once\n3. Here: search + pick a person\n4. Write messages > APPLY\n5. Kill Messenger, reopen - check chat\n\nList preview may revert on sync.\nUse Refresh if chats don't load.";
+    howto.translatesAutoresizingMaskIntoConstraints = NO;
+    [stack addArrangedSubview:self.statusLabel];
+    [stack addArrangedSubview:howto];
+    [stack addArrangedSubview:self.searchField];
     [stack addArrangedSubview:self.searchField];
     [stack addArrangedSubview:self.selectedLabel];
     [stack addArrangedSubview:self.peopleScroll];
@@ -758,6 +777,27 @@ static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
     self.resultLabel.text = @"\U0001F50E Sniffing all snippet sources...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifySniff object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
+}
+
+- (void)diagnosticsTapped {
+    [self.view endEditing:YES];
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"\U0001F4CA Collecting diagnostics... open the chat list first if cache not captured";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyIvars object:nil userInfo:@{} deliverImmediately:YES];
+}
+
+- (void)repairRowTapped {
+    [self.view endEditing:YES];
+    NSString *tid = _selID ?: @"";
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"Repairing...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyRepair object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
 
 - (void)deepScanTapped {
