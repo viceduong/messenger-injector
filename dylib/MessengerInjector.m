@@ -2984,6 +2984,11 @@ static void MI_ctor(void) {
 
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
 
+    // Auto class-scan: map the current architecture for the preview fix.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        MI_hClassScan();
+    });
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSDistributedNotificationCenter *dnc = [NSDistributedNotificationCenter defaultCenter];
 

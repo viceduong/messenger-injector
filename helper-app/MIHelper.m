@@ -786,7 +786,7 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     self.resultLabel.textColor = [UIColor labelColor];
     self.resultLabel.text = @"\U0001F4CA Collecting diagnostics... open the chat list first if cache not captured";
     [[NSDistributedNotificationCenter defaultCenter]
-        postNotificationName:kNotifyIvars object:nil userInfo:@{} deliverImmediately:YES];
+        postNotificationName:kNotifyClasses object:nil userInfo:@{} deliverImmediately:YES];
 }
 
 - (void)repairRowTapped {
