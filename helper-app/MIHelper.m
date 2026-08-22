@@ -49,6 +49,7 @@ static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
+static NSString *const kNotifyClasses  = @"com.messenger.injector.classes";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
