@@ -1227,8 +1227,7 @@ static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NS
                         else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
                         [row appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
                     }
-                    [r appendFormat:@"[range %@] %@
-", tbl, row];
+                    [r appendFormat:@"[range %@] %@\n", tbl, row];
                     rn++;
                 }
                 sqlite3_finalize(rs);
