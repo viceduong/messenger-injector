@@ -241,6 +241,7 @@ static void MI_hMark(NSString *threadId);
 static void MI_hRepairRow(NSString *threadId);
 static void MI_hDumpClasses(NSString *filter);
 static void MI_hDumpIvars(void);
+static void MI_hClassScan(void);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
@@ -1835,6 +1836,44 @@ static void MI_hDumpClasses(NSString *filter) {
     });
 }
 
+// Scan ALL live ObjC classes bucketed by UI-relevant keywords.
+static void MI_hClassScan(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSMutableString *r = [NSMutableString string];
+            NSArray *filters = @[@"Thread", @"Snippet", @"Summary", @"Inbox", @"Conversation"];
+            NSMutableArray *buckets = [NSMutableArray array];
+            for (NSUInteger i = 0; i < filters.count; i++) [buckets addObject:[NSMutableArray array]];
+
+            int numClasses = objc_getClassList(NULL, 0);
+            int total = 0;
+            if (numClasses > 0) {
+                Class *classes = (__unsafe_unretained Class *)malloc(sizeof(Class) * numClasses);
+                total = objc_getClassList(classes, numClasses);
+                for (int i = 0; i < total; i++) {
+                    NSString *name = NSStringFromClass(classes[i]);
+                    for (NSUInteger f = 0; f < filters.count; f++) {
+                        if ([name rangeOfString:filters[f] options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                            if ([buckets[f] count] < 22) [buckets[f] addObject:name];
+                            break;
+                        }
+                    }
+                }
+                free(classes);
+            }
+            [r appendFormat:@"total classes: %d\n", total];
+            for (NSUInteger f = 0; f < filters.count; f++) {
+                [r appendFormat:@"\n== %@ (%d) ==\n", filters[f], (int)[buckets[f] count]];
+                for (NSString *nm in buckets[f]) [r appendFormat:@"%@\n", nm];
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
+        } @catch (NSException *e) {
+            MI_postResult(@"progress", [NSString stringWithFormat:@"scan exc: %@", e.reason]);
+        }
+    });
+}
+
 static void MI_hDumpIvars(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
@@ -2981,7 +3020,7 @@ static void MI_ctor(void) {
         [dnc addObserverForName:kNotifyIvars object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hDumpIvars(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"ivars obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyClasses object:nil queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification *n) { @try { MI_hDumpClasses(n.userInfo[@"filter"] ?: @"Thread"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"classes obs: %@", e.name]); } }];
+            usingBlock:^(NSNotification *n) { @try { MI_hClassScan(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"classes obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hThreadRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"syncrow obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]
