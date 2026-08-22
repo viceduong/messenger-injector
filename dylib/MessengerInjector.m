@@ -2628,10 +2628,10 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     sqlite3_stmt *pi = NULL;
                     NSMutableArray *cn = [NSMutableArray array];
                     NSString *pq = [NSString stringWithFormat:@"PRAGMA table_info(\"%@\")", tbl];
-                    if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &pi, NULL) != SQLITE_OK) { [r appendFormat:@"[%@] MISSING\n", tbl]; continue; }
+                    if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &pi, NULL) != SQLITE_OK) { [report appendFormat:@"[%@] MISSING\n", tbl]; continue; }
                     while (sqlite3_step(pi) == SQLITE_ROW) { NSString *c = MI_cstr(sqlite3_column_text(pi,1)); if (c.length) [cn addObject:c]; }
                     sqlite3_finalize(pi);
-                    [r appendFormat:@"[%@] cols=%@\n", tbl, [cn componentsJoinedByString:@","]];
+                    [report appendFormat:@"[%@] cols=%@\n", tbl, [cn componentsJoinedByString:@","]];
                     sqlite3_stmt *rs = NULL;
                     NSString *sq = [NSString stringWithFormat:@"SELECT * FROM \"%@\" LIMIT 2", tbl];
                     if (sqlite3_prepare_v2(db, sq.UTF8String, -1, &rs, NULL) == SQLITE_OK) {
@@ -2651,10 +2651,10 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                                 } else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(rs,c)];
                                 [rowS appendFormat:@"%s=%@ ", sqlite3_column_name(rs,c), v];
                             }
-                            [r appendFormat:@"  row: %@\n", rowS];
+                            [report appendFormat:@"  row: %@\n", rowS];
                             rn++;
                         }
-                        if (rn == 0) [r appendFormat:@"  (empty)\n"];
+                        if (rn == 0) [report appendFormat:@"  (empty)\n"];
                         sqlite3_finalize(rs);
                     }
                 }
