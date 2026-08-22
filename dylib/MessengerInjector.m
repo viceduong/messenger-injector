@@ -1678,13 +1678,13 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
             MI_progress(@"inject: DB opened RW, dummy functions registered");
 
+            NSMutableString *report = [NSMutableString string];
+
             // A/B experiment: cycle historical write-path variants
             NSInteger variant = [[NSUserDefaults standardUserDefaults] integerForKey:@"mi_variant"] + 1;
             if (variant > 3) variant = 1;
             [[NSUserDefaults standardUserDefaults] setInteger:variant forKey:@"mi_variant"];
             [report appendFormat:@"\n=== VARIANT %ld ===\n", (long)variant];
-
-            NSMutableString *report = [NSMutableString string];
 
             // Step 0: NAME input support — if threadId is not all digits,
             // treat it as a chat name and resolve via contacts (normalized).
