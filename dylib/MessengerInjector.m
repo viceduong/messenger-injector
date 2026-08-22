@@ -2175,11 +2175,9 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     MI_esc(snip), lastIsMe ? localUid : threadId, MI_esc(threadId)];
                 char *e2 = NULL;
                 if (sqlite3_exec(db, upd2.UTF8String, NULL, NULL, &e2) == SQLITE_OK) {
-                    [report appendFormat:@"threads (sync) updated (%d row(s))
-", sqlite3_changes(db)];
+                    [report appendFormat:@"threads (sync) updated (%d row(s))\n", sqlite3_changes(db)];
                 } else {
-                    [report appendFormat:@"threads UPDATE error: %s
-", e2 ? e2 : "?"];
+                    [report appendFormat:@"threads UPDATE error: %s\n", e2 ? e2 : "?"];
                     if (e2) sqlite3_free(e2);
                 }
             }
