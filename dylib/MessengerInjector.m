@@ -2080,6 +2080,24 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
+            // Deep clean: purge EVERY injected-looking row for this thread.
+            // Accumulated scrubbed/invalid rows may block preview recomputation;
+            // the one historical success happened on a pristine thread.
+            {
+                NSString *dcm = [NSString stringWithFormat:
+                    @"DELETE FROM messages WHERE thread_key = '%@' AND message_id LIKE '%%-%%'", threadId];
+                NSString *dcc = [NSString stringWithFormat:
+                    @"DELETE FROM client_messages WHERE thread_pk = %lld AND "
+                     "(text IS NULL OR message_creation_type != 5 OR local_data_id IS NOT NULL)", threadPk];
+                sqlite3_exec(db, dcm.UTF8String, NULL, NULL, NULL);
+                char *dcErr = NULL;
+                int cmDel = 0;
+                if (sqlite3_exec(db, dcc.UTF8String, NULL, NULL, &dcErr) == SQLITE_OK) {
+                    cmDel = sqlite3_changes(db);
+                } else if (dcErr) { sqlite3_free(dcErr); }
+                [report appendFormat:@"deep clean: %d client row(s) purged\n", cmDel];
+            }
+
             // Step 7: INSERT messages
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[5] reached insert step"); });
             MI_progress(@"inject: starting transaction");
