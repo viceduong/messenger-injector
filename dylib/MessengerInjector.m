@@ -243,6 +243,7 @@ static void MI_hMark(NSString *threadId);
 static void MI_hRepairRow(NSString *threadId);
 static void MI_hDumpClasses(NSString *filter);
 static void MI_hDumpIvars(void);
+static void MI_hRestoreHistory(NSString *threadId);
 static void MI_hClassScan(void);
 static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm);
 static void MI_hProtect(NSString *threadId, BOOL arm);
@@ -2053,7 +2054,55 @@ static void MI_hProtect(NSString *threadIdIn, BOOL arm) {
     });
 }
 
-static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
+// Drop per-thread range/cursor rows so the next launch requests a FULL
+// replay of the conversation from the server (restores "lost" real messages).
+static void MI_hRestoreHistory(NSString *threadId) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_postResult(@"progress", @"restore: no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                MI_postResult(@"progress", @"restore: open failed"); if (db) sqlite3_close(db); return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+            long long pk = 0;
+            sqlite3_stmt *ps = NULL;
+            NSString *pq = [NSString stringWithFormat:
+                @"SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1", threadId];
+            if (sqlite3_prepare_v2(db, pq.UTF8String, -1, &ps, NULL) == SQLITE_OK) {
+                if (sqlite3_step(ps) == SQLITE_ROW) pk = sqlite3_column_int64(ps, 0);
+                sqlite3_finalize(ps);
+            }
+            NSMutableString *r = [NSMutableString string];
+            if (pk > 0) {
+                char *e1 = NULL;
+                NSString *q1 = [NSString stringWithFormat:@"DELETE FROM client_messages_ranges WHERE thread_pk = %lld", pk];
+                if (sqlite3_exec(db, q1.UTF8String, NULL, NULL, &e1) == SQLITE_OK)
+                    [r appendFormat:@"ranges cleared (%d)\n", sqlite3_changes(db)];
+                else { [r appendFormat:@"ranges clear error: %s\n", e1 ? e1 : "?"]; if (e1) sqlite3_free(e1); }
+                NSString *q2 = [NSString stringWithFormat:@"DELETE FROM client_messages WHERE thread_pk = %lld", pk];
+                if (sqlite3_exec(db, q2.UTF8String, NULL, NULL, NULL) == SQLITE_OK)
+                    [r appendFormat:@"local copies cleared (%d) - server will replay\n", sqlite3_changes(db)];
+            } else {
+                [r appendString:@"thread row not found\n"];
+            }
+            // MDCore pagination cursors
+            char *e3 = NULL;
+            NSString *q3 = [NSString stringWithFormat:
+                @"DELETE FROM mdcore_authoritative_store_pagination_cursors WHERE thread_id IN ('%@', %lld)", threadId, threadId.longLongValue];
+            if (sqlite3_exec(db, q3.UTF8String, NULL, NULL, &e3) == SQLITE_OK)
+                [r appendFormat:@"mdcore cursors cleared (%d)\n", sqlite3_changes(db)];
+            else if (e3) sqlite3_free(e3);
+
+            sqlite3_close(db);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress",
+                [NSString stringWithFormat:@"%@\nNow: kill Messenger, reopen ON WIFI, open the chat - full history replays from server.", r]); });
+        } @catch (NSException *e) { MI_postResult(@"progress", [NSString stringWithFormat:@"restore exc: %@", e.reason]); }
+    });
+}
+
+static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[0] apply received"); });
@@ -2503,31 +2552,22 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            // Deep clean: purge EVERY injected-looking row for this thread.
-            // Accumulated scrubbed/invalid rows may block preview recomputation;
-            // the one historical success happened on a pristine thread.
+            // Surgical cleanup: remove ONLY rows recorded in our injection ledger.
+            // Never touches real messages (fixes progressive history loss).
             {
-                NSString *dcm = [NSString stringWithFormat:
-                    @"DELETE FROM messages WHERE thread_key = '%@' AND message_id LIKE '%%-%%'", threadId];
-                NSString *dcc = [NSString stringWithFormat:
-                    @"DELETE FROM client_messages WHERE thread_pk = %lld AND "
-                     "(text IS NULL OR message_creation_type != 5 OR local_data_id IS NOT NULL)", threadPk];
-                sqlite3_exec(db, dcm.UTF8String, NULL, NULL, NULL);
-                char *dcErr = NULL;
-                int cmDel = 0;
-                if (sqlite3_exec(db, dcc.UTF8String, NULL, NULL, &dcErr) == SQLITE_OK) {
-                    cmDel = sqlite3_changes(db);
-                } else if (dcErr) { sqlite3_free(dcErr); }
-                [report appendFormat:@"deep clean: %d client row(s) purged\n", cmDel];
-
-            // Full-fidelity sync-row clone: heals rows destroyed by earlier builds.
-            {
-                NSDictionary *lm = messages.lastObject;
-                NSString *lt = lm[@"t"] ?: @"";
-                BOOL im = [lm[@"s"] isEqualToString:@"me"];
-                NSString *snip2 = im ? [NSString stringWithFormat:@"You: %@", lt] : lt;
-                NSString *repMsg = MI_repairRowCore(db, threadId, snip2);
-                [report appendFormat:@"row repair: %@\n", repMsg ?: @"cloned OK"];
+                int cmDel = 0, mDel = 0;
+                char *le = NULL;
+                if (sqlite3_exec(db,
+                    "DELETE FROM client_messages WHERE pk IN (SELECT pk FROM mi_ledger_cm)",
+                    NULL, NULL, &le) == SQLITE_OK) cmDel = sqlite3_changes(db);
+                if (le) { sqlite3_free(le); le = NULL; }
+                sqlite3_exec(db,
+                    "DELETE FROM messages WHERE message_id IN (SELECT message_id FROM mi_ledger_m)",
+                    NULL, NULL, NULL);
+                mDel = sqlite3_changes(db);
+                sqlite3_exec(db, "DELETE FROM mi_ledger_cm", NULL, NULL, NULL);
+                sqlite3_exec(db, "DELETE FROM mi_ledger_m", NULL, NULL, NULL);
+                [report appendFormat:@"deep clean: %d injected client row(s), %d sync row(s) removed\n", cmDel, mDel];
             }
             }
 
@@ -2611,6 +2651,15 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         @"%lld, 2, 0, 0, 0, "
                         @"'%@', 0, 6, %lld, 1, %lld)",
                         threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
+                    if (msgIdStr.length) {
+                        char *le = NULL;
+                        sqlite3_stmt *lmst = NULL;
+                        if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO mi_ledger_m (message_id) VALUES (?)", -1, &lmst, NULL) == SQLITE_OK) {
+                            sqlite3_bind_text(lmst, 1, msgIdStr.UTF8String, -1, SQLITE_TRANSIENT);
+                            sqlite3_step(lmst);
+                            sqlite3_finalize(lmst);
+                        }
+                    }
                     char *err2 = NULL;
                     int rc2 = sqlite3_exec(db, clientSql.UTF8String, NULL, NULL, &err2);
                     if (rc2 == SQLITE_OK) {
