@@ -70,6 +70,7 @@ static NSString *const kNotifyThreads = @"com.messenger.injector.threadList";
 static NSString *const kNotifyResearch = @"com.messenger.injector.research";
 static NSString *const kNotifyInject  = @"com.messenger.injector.inject";
 static NSString *const kNotifySniff   = @"com.messenger.injector.sniff";
+static NSString *const kNotifyRestore = @"com.messenger.injector.restore";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
 static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
@@ -3315,6 +3316,8 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hResearch(n.userInfo[@"threadId"] ?: @"", n.userInfo[@"mode"] ?: @"map"); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"research: %@", e.name]); } }];
         [dnc addObserverForName:kNotifySniff object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hSniff(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"sniff obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyRestore object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hRestoreHistory(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"restore obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyMark object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hMark(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"mark obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyRepair object:nil queue:[NSOperationQueue mainQueue]

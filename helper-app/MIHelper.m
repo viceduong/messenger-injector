@@ -53,6 +53,7 @@ static NSString *const kNotifyClasses  = @"com.messenger.injector.classes";
 static NSString *const kNotifyProtect = @"com.messenger.injector.protect";
 static NSString *const kNotifyUnprotect = @"com.messenger.injector.unprotect";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
+static NSString *const kNotifyRestore = @"com.messenger.injector.restore";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 
@@ -324,6 +325,8 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Inspect data" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
     UIButton *diagBtn = [self makeBtn:@"\U0001F4CA  Diagnostics" bg:[UIColor systemIndigoColor] act:@selector(diagnosticsTapped) h:40];
     diagBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    UIButton *restoreBtn = [self makeBtn:@"\u267B\uFE0F  Restore history (server replay)" bg:[UIColor systemTealColor] act:@selector(restoreHistoryTapped) h:40];
+    restoreBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *protectBtn = [self makeBtn:@"\U0001F6E1\uFE0F  Protect preview (anti-sync)" bg:[UIColor systemGreenColor] act:@selector(protectTapped) h:40];
     protectBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *unprotectBtn = [self makeBtn:@"\U0001F513  Remove protection" bg:[UIColor systemOrangeColor] act:@selector(unprotectTapped) h:40];
@@ -353,6 +356,7 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:diagBtn];
+    [self.debugStack addArrangedSubview:restoreBtn];
     [self.debugStack addArrangedSubview:protectBtn];
     [self.debugStack addArrangedSubview:unprotectBtn];
     [self.debugStack addArrangedSubview:sniffBtn];
@@ -823,6 +827,17 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     self.resultLabel.text = @"Repairing...";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyRepair object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
+}
+
+- (void)restoreHistoryTapped {
+    [self.view endEditing:YES];
+    NSString *tid = _selID ?: @"";
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = @"\u267B\uFE0F Clearing sync ranges... then reopen Messenger on WiFi";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:kNotifyRestore object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
 
 - (void)deepScanTapped {
