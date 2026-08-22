@@ -1880,6 +1880,7 @@ static void MI_hDumpIvars(void) {
 static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[0] apply received"); });
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[1] inject request received"); });
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
@@ -2473,7 +2474,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
-            MI_probeStores(db, threadId, threadPk, report);
 
             // CRITICAL: the main .db file rewrite (TRUNCATE) is what triggers
             // Messenger to rebuild its thread list from the DB. A blocked
