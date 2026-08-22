@@ -2036,6 +2036,7 @@ static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm) {
 static void MI_hProtect(NSString *threadId, BOOL arm) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
+            threadId = @"100003563737446"; // locked to Trinh Duc Linh per request
             NSString *dbPath = MI_findDatabase();
             if (!dbPath.length) { MI_postResult(@"progress", @"protect: no DB"); return; }
             sqlite3 *db = NULL;
@@ -2052,7 +2053,7 @@ static void MI_hProtect(NSString *threadId, BOOL arm) {
     });
 }
 
-static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
+static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[0] apply received"); });
@@ -2719,12 +2720,6 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_
                 } else {
                     [report appendString:@"[MDCore] open failed\n"];
                 }
-            }
-
-            // Auto-arm snippet protection (lives in DB; blocks sync overwrite)
-            {
-                NSString *pmsg = MI_ProtectTriggers(db, threadId, YES);
-                [report appendFormat:@"protection: %@\n", pmsg ?: @"armed"];
             }
 
             // checkpoint means no file change -> stale list. Retry aggressively
