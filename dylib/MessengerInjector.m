@@ -1886,7 +1886,7 @@ static void MI_hClassScan(void) {
             MISLogAppend(log, @"scan:buckets done");
 
             NSMutableString *r = [NSMutableString string];
-            [r appendFormat:@"total classes: %d\n", total];
+            [r appendFormat:@"total classes: %d\n", (int)names.count];
             for (NSUInteger f = 0; f < filters.count; f++) {
                 [r appendFormat:@"\n== %@ (%d) ==\n", filters[f], (int)[buckets[f] count]];
                 for (NSString *nm in buckets[f]) [r appendFormat:@"%@\n", nm];
