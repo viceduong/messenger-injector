@@ -2151,10 +2151,10 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         @"sender_contact_pk, send_status, is_hidden, is_tombstoned, is_reply_only, "
                         @"persistent_id, message_content_type, message_creation_type, primary_sort_key, "
                         @"should_bump_thread, resonance_offline_threading_id) "
-                        @"VALUES (%lld, %lld, -1, %lld, '%@', 0, "
+                        @"VALUES (%lld, %lld, %lld, %lld, '%@', 0, "
                         @"%lld, 2, 0, 0, 0, "
                         @"'%@', 0, 5, %lld, 1, %lld)",
-                        threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
+                        threadPk, ts, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
                     char *err2 = NULL;
                     int rc2 = sqlite3_exec(db, clientSql.UTF8String, NULL, NULL, &err2);
                     if (rc2 == SQLITE_OK) {
