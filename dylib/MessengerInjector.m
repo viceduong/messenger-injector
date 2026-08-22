@@ -2115,7 +2115,14 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             // Force WAL checkpoint so changes are written to main DB file
-            sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
+            // Exact v2.6-era flush (the archived-list-success window).
+            // Short busy timeout prevents the historic indefinite hang;
+            // worst case it returns busy and data stays WAL-committed.
+            {
+                sqlite3_busy_timeout(db, 300);
+                sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
+                sqlite3_busy_timeout(db, 5000);
+            }
             MI_progress(@"inject: WAL checkpoint done");
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
             if (threadPk > 0) {
@@ -2152,7 +2159,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
             MI_sniffInto(db, threadId, threadPk, report);
-            MI_threadRowInto(db, threadId, report);
+            // sync-row insert disabled: reproduce v2.6 exactly (re-enable after A/B)
 
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result: %d inserted, %d errors ===\n", inserted, errors];
