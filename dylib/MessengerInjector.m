@@ -2236,8 +2236,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                     @"UPDATE client_messages_ranges SET min_message_sort_order = -1 "
                     @"WHERE thread_pk = %lld AND min_message_sort_order > -1", threadPk];
                 if (sqlite3_exec(db, rq.UTF8String, NULL, NULL, &er) == SQLITE_OK) {
-                    [report appendFormat:@"range floor widened (%d row(s))
-", sqlite3_changes(db)];
+                    [report appendFormat:@"range floor widened (%d row(s))\n", sqlite3_changes(db)];
                     if (sqlite3_changes(db) == 0) {
                         er = NULL;
                         NSString *iq = [NSString stringWithFormat:
@@ -2246,14 +2245,11 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                              "max_message_sort_order, max_message_pk, has_more_after, is_loading_before, is_loading_after) "
                              "VALUES (%lld, -1, -1, 0, 9223372036854775807, -1, 0, 0, 0)", threadPk];
                         if (sqlite3_exec(db, iq.UTF8String, NULL, NULL, &er) == SQLITE_OK)
-                            [report appendFormat:@"ranges row created (%d)
-", sqlite3_changes(db)];
-                        else { [report appendFormat:@"ranges INSERT error: %s
-", er ? er : "?"]; if (er) sqlite3_free(er); }
+                            [report appendFormat:@"ranges row created (%d)\n", sqlite3_changes(db)];
+                        else { [report appendFormat:@"ranges INSERT error: %s\n", er ? er : "?"]; if (er) sqlite3_free(er); }
                     }
                 } else {
-                    [report appendFormat:@"range UPDATE error: %s
-", er ? er : "?"];
+                    [report appendFormat:@"range UPDATE error: %s\n", er ? er : "?"];
                     if (er) sqlite3_free(er);
                 }
             }
