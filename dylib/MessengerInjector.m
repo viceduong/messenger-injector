@@ -1858,6 +1858,16 @@ static void MI_hDumpIvars(void) {
                 }
                 free(iv);
                 [r appendFormat:@"\n[%@]\n ivars: %@\n", nm, ivs];
+                // methods (selectors) — compact, capped
+                unsigned int mc = 0;
+                Method *ms = class_copyMethodList(c, &mc);
+                NSMutableString *msel = [NSMutableString string];
+                for (unsigned int i = 0; i < mc && i < 60; i++) {
+                    [msel appendFormat:@"%@ ", NSStringFromSelector(method_getName(ms[i]))];
+                }
+                free(ms);
+                if (msel.length > 700) msel = [NSMutableString stringWithFormat:@"%@…", [msel substringToIndex:700]];
+                [r appendFormat:@" methods(%u): %@\n", mc, msel];
             }
 
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
