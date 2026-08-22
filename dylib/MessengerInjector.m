@@ -2254,12 +2254,17 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
 
-            MI_sniffInto(db, threadId, threadPk, report);
             if (variant == 2) {
                 MI_threadRowInto(db, threadId, report);
             } // variants 1/3: no sync-row insert (v2.6/v2.0n replica)
-            MI_compareRealVsInjected(db, report);
 
+
+            // Distributed notifications silently drop oversized payloads -
+            // keep the result well under the limit.
+            if (report.length > 2200) {
+                NSString *head = [report substringToIndex:1800];
+                report = [NSMutableString stringWithFormat:@"%@\n[...truncated %ld chars - full log via Research...]\n", head, (long)(report.length - 1800)];
+            }
 
             sqlite3_close(db);
             [report appendFormat:@"\n=== Result v3.6: %d inserted, %d errors ===\n", inserted, errors];
