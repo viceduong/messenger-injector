@@ -74,6 +74,8 @@ static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
 static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 static NSString *const kNotifyClasses = @"com.messenger.injector.classes";
+static NSString *const kNotifyProtect = @"com.messenger.injector.protect";
+static NSString *const kNotifyUnprotect = @"com.messenger.injector.unprotect";
 static NSString *const kNotifyDeepScan = @"com.messenger.injector.deepscan";
 static NSString *const kNotifyThreadRow = @"com.messenger.injector.threadrow";
 
@@ -242,6 +244,8 @@ static void MI_hRepairRow(NSString *threadId);
 static void MI_hDumpClasses(NSString *filter);
 static void MI_hDumpIvars(void);
 static void MI_hClassScan(void);
+static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm);
+static void MI_hProtect(NSString *threadId, BOOL arm);
 static void MI_hDeepScan(NSString *needle);
 static void MI_hThreadRow(NSString *threadId);
 static void MI_sniffInto(sqlite3 *db, NSString *threadId, long long threadPk, NSMutableString *r);
@@ -1991,7 +1995,64 @@ static void MI_StartEnforcer(void) {
     });
 }
 
-static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
+// Arm/disarm snippet-protection triggers. They live in the DB file itself ->
+// survive relaunches. BEFORE UPDATE + RAISE(IGNORE) silently cancels external
+// updates that change the snippet (sync delta defense), zero network impact.
+static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm) {
+    @try {
+        NSString *safe = [[threadId componentsSeparatedByCharactersInSet:
+            [[NSCharacterSet alphanumericCharacterSet] invertedSet]] componentsJoinedByString:@""];
+        NSMutableArray *stmts = [NSMutableArray array];
+        if (arm) {
+            [stmts addObject:[NSString stringWithFormat:
+                @"CREATE TRIGGER IF NOT EXISTS mi_keep_t_%@ "
+                 "BEFORE UPDATE ON threads "
+                 "WHEN NEW.thread_key = '%@' AND NEW.snippet IS NOT OLD.snippet "
+                 "BEGIN SELECT RAISE(IGNORE); END", safe, threadId]];
+            [stmts addObject:[NSString stringWithFormat:
+                @"CREATE TRIGGER IF NOT EXISTS mi_keep_c_%@ "
+                 "BEFORE UPDATE ON client_threads "
+                 "WHEN pk = (SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1) "
+                 "AND NEW.snippet IS NOT OLD.snippet "
+                 "BEGIN SELECT RAISE(IGNORE); END", safe, threadId]];
+        } else {
+            [stmts addObject:[NSString stringWithFormat:@"DROP TRIGGER IF EXISTS mi_keep_t_%@", safe]];
+            [stmts addObject:[NSString stringWithFormat:@"DROP TRIGGER IF EXISTS mi_keep_c_%@", safe]];
+        }
+        for (NSString *q in stmts) {
+            char *err = NULL;
+            if (sqlite3_exec(db, q.UTF8String, NULL, NULL, &err) != SQLITE_OK) {
+                NSString *e = err ? [NSString stringWithUTF8String:err] : @"?";
+                if (err) sqlite3_free(err);
+                return e;
+            }
+        }
+        return nil;
+    } @catch (NSException *e) {
+        return [NSString stringWithFormat:@"exc: %@", e.reason];
+    }
+}
+
+static void MI_hProtect(NSString *threadId, BOOL arm) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @try {
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_postResult(@"progress", @"protect: no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                MI_postResult(@"progress", @"protect: open failed"); if (db) sqlite3_close(db); return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+            // trigger bodies use only RAISE() - no app functions needed on any connection
+            NSString *msg = MI_ProtectTriggers(db, threadId, arm);
+            sqlite3_close(db);
+            dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress",
+                msg ?: (arm ? @"PROTECTION ARMED - snippet locked against sync" : @"protection removed")); });
+        } @catch (NSException *e) { MI_postResult(@"progress", [NSString stringWithFormat:@"protect exc: %@", e.reason]); }
+    });
+}
+
+static void MI_hInject(NSString *threadIdIn, NSArray *messages) {static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
     __block NSString *threadId = threadIdIn;
     MI_progress([NSString stringWithFormat:@"inject: start threadId=%@ msgCount=%d", threadId, (int)messages.count]);
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[0] apply received"); });
@@ -2660,6 +2721,13 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 }
             }
 
+            // Auto-arm snippet protection (lives in DB; blocks sync overwrite)
+            {
+                NSString *pmsg = MI_ProtectTriggers(db, threadId, YES);
+                [report appendFormat:@"protection: %@\n", pmsg ?: @"armed"];
+            }
+
+            // checkpoint means no file change -> stale list. Retry aggressively
             // checkpoint means no file change -> stale list. Retry aggressively
             // checkpoint means no file change -> stale list. Retry aggressively
             // until it completes; each attempt also flushes more WAL frames.
@@ -3195,6 +3263,10 @@ static void MI_ctor(void) {
             usingBlock:^(NSNotification *n) { @try { MI_hDumpIvars(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"ivars obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyClasses object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hClassScan(); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"classes obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyProtect object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hProtect(n.userInfo[@"threadId"] ?: @"", YES); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"protect obs: %@", e.name]); } }];
+        [dnc addObserverForName:kNotifyUnprotect object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^(NSNotification *n) { @try { MI_hProtect(n.userInfo[@"threadId"] ?: @"", NO); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"unprotect obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyThreadRow object:nil queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification *n) { @try { MI_hThreadRow(n.userInfo[@"threadId"] ?: @""); } @catch (NSException *e) { MI_progress([NSString stringWithFormat:@"syncrow obs: %@", e.name]); } }];
         [dnc addObserverForName:kNotifyInject object:nil queue:[NSOperationQueue mainQueue]

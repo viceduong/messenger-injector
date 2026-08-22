@@ -50,6 +50,8 @@ static NSString *const kNotifyCrash   = @"com.messenger.injector.crashLog";
 static NSString *const kNotifyListFiles = @"com.messenger.injector.listFiles";
 static NSString *const kNotifyDumpView  = @"com.messenger.injector.dump";
 static NSString *const kNotifyClasses  = @"com.messenger.injector.classes";
+static NSString *const kNotifyProtect = @"com.messenger.injector.protect";
+static NSString *const kNotifyUnprotect = @"com.messenger.injector.unprotect";
 static NSString *const kNotifyRepair  = @"com.messenger.injector.repair";
 static NSString *const kNotifyMark    = @"com.messenger.injector.mark";
 static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
@@ -322,6 +324,10 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     UIButton *sqlBtn = [self makeBtn:@"\U0001F4DC  Inspect data" bg:[UIColor systemIndigoColor] act:@selector(researchSqlTapped) h:40];
     UIButton *diagBtn = [self makeBtn:@"\U0001F4CA  Diagnostics" bg:[UIColor systemIndigoColor] act:@selector(diagnosticsTapped) h:40];
     diagBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    UIButton *protectBtn = [self makeBtn:@"\U0001F6E1\uFE0F  Protect preview (anti-sync)" bg:[UIColor systemGreenColor] act:@selector(protectTapped) h:40];
+    protectBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    UIButton *unprotectBtn = [self makeBtn:@"\U0001F513  Remove protection" bg:[UIColor systemOrangeColor] act:@selector(unprotectTapped) h:40];
+    unprotectBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     UIButton *sniffBtn = [self makeBtn:@"\U0001F50E  Scan cache" bg:[UIColor systemIndigoColor] act:@selector(sniffTapped) h:40];
     sniffBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     self.needleField = [[UITextField alloc] init];
@@ -347,6 +353,8 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     [self.debugStack addArrangedSubview:researchBtn];
     [self.debugStack addArrangedSubview:sqlBtn];
     [self.debugStack addArrangedSubview:diagBtn];
+    [self.debugStack addArrangedSubview:protectBtn];
+    [self.debugStack addArrangedSubview:unprotectBtn];
     [self.debugStack addArrangedSubview:sniffBtn];
     [self.debugStack addArrangedSubview:self.needleField];
     [self.debugStack addArrangedSubview:trowBtn];
@@ -780,6 +788,21 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifySniff object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
+
+- (void)sendProtect:(BOOL)arm {
+    [self.view endEditing:YES];
+    NSString *tid = _selID ?: @"";
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    self.resultLabel.textColor = [UIColor labelColor];
+    self.resultLabel.text = arm ? @"\U0001F6E1\uFE0F Arming protection..." : @"Removing protection...";
+    [[NSDistributedNotificationCenter defaultCenter]
+        postNotificationName:arm ? kNotifyProtect : kNotifyUnprotect
+        object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
+}
+
+- (void)protectTapped { [self sendProtect:YES]; }
+- (void)unprotectTapped { [self sendProtect:NO]; }
 
 - (void)diagnosticsTapped {
     [self.view endEditing:YES];
