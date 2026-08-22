@@ -1758,7 +1758,7 @@ static void MI_hRepairRow(NSString *threadId) {
             NSMutableString *vSql = [NSMutableString string];
             for (NSUInteger i = 0; i < cols.count; i++) {
                 NSString *c = cols[i];
-                [cSql appendFormat:@"\"%@"%s", c, (i + 1 < cols.count) ? "," : ""];
+                [cSql appendFormat:@"%s%s", c.UTF8String, (i + 1 < cols.count) ? "," : ""];
                 if (override[c] != nil) {
                     id ov = override[c];
                     if ([ov isKindOfClass:[NSNull class]]) [vSql appendString:@"NULL"];
