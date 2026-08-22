@@ -1840,32 +1840,55 @@ static void MI_hDumpClasses(NSString *filter) {
 static void MI_hClassScan(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @try {
-            NSMutableString *r = [NSMutableString string];
+            NSMutableString *log = [NSMutableString string];
+            #define MI_SLOG(x) do { [log appendFormat:@"%@\n", x]; \
+                NSString *lp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_scan_log.txt"]; \
+                [log writeToFile:lp atomically:YES encoding:NSUTF8StringEncoding error:nil]; } while (0)
+            MI_SLOG(@"scan:start");
+
             NSArray *filters = @[@"Thread", @"Snippet", @"Summary", @"Inbox", @"Conversation"];
             NSMutableArray *buckets = [NSMutableArray array];
             for (NSUInteger i = 0; i < filters.count; i++) [buckets addObject:[NSMutableArray array]];
 
             int numClasses = objc_getClassList(NULL, 0);
-            int total = 0;
-            if (numClasses > 0) {
+            MI_SLOG([NSString stringWithFormat:@"scan:count=%d", numClasses]);
+            if (numClasses <= 0) { MI_postResult(@"progress", @"scan: no classes"); return; }
+
+            // Collect ALL names first, freeing the class list immediately.
+            NSMutableArray *names = [NSMutableArray arrayWithCapacity:numClasses];
+            @autoreleasepool {
                 Class *classes = (__unsafe_unretained Class *)malloc(sizeof(Class) * numClasses);
-                total = objc_getClassList(classes, numClasses);
-                for (int i = 0; i < total; i++) {
-                    NSString *name = NSStringFromClass(classes[i]);
-                    for (NSUInteger f = 0; f < filters.count; f++) {
-                        if ([name rangeOfString:filters[f] options:NSCaseInsensitiveSearch].location != NSNotFound) {
-                            if ([buckets[f] count] < 22) [buckets[f] addObject:name];
-                            break;
+                if (!classes) { MI_postResult(@"progress", @"scan: malloc failed"); return; }
+                int got = objc_getClassList(classes, numClasses);
+                for (int i = 0; i < got; i++) [names addObject:NSStringFromClass(classes[i])];
+                free(classes);
+            }
+            MI_SLOG([NSString stringWithFormat:@"scan:names=%d", (int)names.count]);
+
+            // Bucket in chunks with pools.
+            for (NSUInteger base = 0; base < names.count; base += 20000) {
+                @autoreleasepool {
+                    NSUInteger e = MIN(base + 20000, names.count);
+                    for (NSUInteger i = base; i < e; i++) {
+                        NSString *name = names[i];
+                        for (NSUInteger f = 0; f < filters.count; f++) {
+                            if ([name rangeOfString:filters[f] options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                                if ([buckets[f] count] < 22) [buckets[f] addObject:name];
+                                break;
+                            }
                         }
                     }
                 }
-                free(classes);
             }
+            MI_SLOG(@"scan:buckets done");
+
+            NSMutableString *r = [NSMutableString string];
             [r appendFormat:@"total classes: %d\n", total];
             for (NSUInteger f = 0; f < filters.count; f++) {
                 [r appendFormat:@"\n== %@ (%d) ==\n", filters[f], (int)[buckets[f] count]];
                 for (NSString *nm in buckets[f]) [r appendFormat:@"%@\n", nm];
             }
+            MI_SLOG(@"scan:report built");
 
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", r); });
         } @catch (NSException *e) {
@@ -2985,7 +3008,7 @@ static void MI_ctor(void) {
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
 
     // Auto class-scan: map the current architecture for the preview fix.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         MI_hClassScan();
     });
 
