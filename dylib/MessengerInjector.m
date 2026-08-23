@@ -1972,6 +1972,15 @@ static NSString *g_enforceSnippet = nil;
 static NSString *g_enforceThreadId = nil;
 static BOOL g_enforcerRunning = NO;
 
+// Allow-flag: our writes set it so protection triggers let them through.
+static void MI_SetAllow(sqlite3 *db, BOOL on) {
+    char *err = NULL;
+    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS mi_allow (on_flag INTEGER)", NULL, NULL, NULL);
+    sqlite3_exec(db, "DELETE FROM mi_allow", NULL, NULL, NULL);
+    if (on) sqlite3_exec(db, "INSERT INTO mi_allow (on_flag) VALUES (1)", NULL, NULL, &err);
+    if (err) sqlite3_free(err);
+}
+
 static void MI_EnforceTick(NSMutableString *log) {
     if (!g_enforceSnippet || !g_enforceThreadId) return;
     NSString *dbPath = MI_findDatabase();
@@ -1982,6 +1991,7 @@ static void MI_EnforceTick(NSMutableString *log) {
         return;
     }
     sqlite3_busy_timeout(db, 300);
+    MI_SetAllow(db, YES); // our write: triggers let it pass
     char *e1 = NULL;
     NSString *q1 = [NSString stringWithFormat:
         @"UPDATE threads SET snippet = '%@', last_activity_timestamp_ms = last_activity_timestamp_ms "
@@ -1993,9 +2003,11 @@ static void MI_EnforceTick(NSMutableString *log) {
          "(SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1)",
          MI_esc(g_enforceSnippet), MI_esc(g_enforceThreadId)];
     sqlite3_exec(db, q2.UTF8String, NULL, NULL, NULL);
+    MI_BumpSchema(db); // schema cookie++ -> live list re-reads
     sqlite3_busy_timeout(db, 250);
     sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL);
     sqlite3_busy_timeout(db, 5000);
+    MI_SetAllow(db, NO); // re-arm shield
     sqlite3_close(db);
 }
 
@@ -2022,16 +2034,21 @@ static NSString *MI_ProtectTriggers(sqlite3 *db, NSString *threadId, BOOL arm) {
             [[NSCharacterSet alphanumericCharacterSet] invertedSet]] componentsJoinedByString:@""];
         NSMutableArray *stmts = [NSMutableArray array];
         if (arm) {
+            // allow-flag table must exist BEFORE triggers reference it
+            sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS mi_allow (on_flag INTEGER)", NULL, NULL, NULL);
+            sqlite3_exec(db, "DELETE FROM mi_allow", NULL, NULL, NULL);
             [stmts addObject:[NSString stringWithFormat:
                 @"CREATE TRIGGER IF NOT EXISTS mi_keep_t_%@ "
                  "BEFORE UPDATE ON threads "
                  "WHEN NEW.thread_key = '%@' AND NEW.snippet IS NOT OLD.snippet "
+                 "AND NOT EXISTS (SELECT 1 FROM mi_allow WHERE on_flag = 1) "
                  "BEGIN SELECT RAISE(IGNORE); END", safe, threadId]];
             [stmts addObject:[NSString stringWithFormat:
                 @"CREATE TRIGGER IF NOT EXISTS mi_keep_c_%@ "
                  "BEFORE UPDATE ON client_threads "
                  "WHEN pk = (SELECT pk FROM client_threads WHERE default_other_participant_profile_picture_fallback_url_list LIKE '%%entity_id=%@%%' LIMIT 1) "
                  "AND NEW.snippet IS NOT OLD.snippet "
+                 "AND NOT EXISTS (SELECT 1 FROM mi_allow WHERE on_flag = 1) "
                  "BEGIN SELECT RAISE(IGNORE); END", safe, threadId]];
         } else {
             [stmts addObject:[NSString stringWithFormat:@"DROP TRIGGER IF EXISTS mi_keep_t_%@", safe]];
@@ -2735,6 +2752,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 BOOL im2 = [lm2[@"s"] isEqualToString:@"me"];
                 g_enforceSnippet = im2 ? [NSString stringWithFormat:@"You: %@", lt2] : lt2;
                 g_enforceThreadId = threadId;
+                [[NSUserDefaults standardUserDefaults] setObject:g_enforceSnippet forKey:@"mi_enforce_snippet"];
+                [[NSUserDefaults standardUserDefaults] setObject:g_enforceThreadId forKey:@"mi_enforce_thread"];
                 MI_StartEnforcer();
             }
 
@@ -2808,6 +2827,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             MI_progress(@"inject: WAL checkpoint done");
             dispatch_async(dispatch_get_main_queue(), ^{ MI_postResult(@"progress", @"[8] checkpoint done - sending result"); });
             if (threadPk > 0 && variant != 3) {
+                MI_SetAllow(db, YES);
                 NSString *lastText = [messages.lastObject[@"t"] ?: @"" copy];
                 long long lastTs = nowMs;
                 // Get last inserted client_messages pk
@@ -3285,6 +3305,15 @@ static void MI_ctor(void) {
     signal(SIGFPE, MI_signalHandler);
 
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
+
+    // Resume snippet enforcement from previous session
+    NSString *es = [[NSUserDefaults standardUserDefaults] stringForKey:@"mi_enforce_snippet"];
+    NSString *et = [[NSUserDefaults standardUserDefaults] stringForKey:@"mi_enforce_thread"];
+    if (es.length > 0 && et.length > 0) {
+        g_enforceSnippet = es;
+        g_enforceThreadId = et;
+        MI_StartEnforcer();
+    }
 
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
