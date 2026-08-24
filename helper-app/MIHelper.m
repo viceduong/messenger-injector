@@ -400,6 +400,7 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     UIStackView *tplRow = [[UIStackView alloc] init];
     tplRow.axis = UILayoutConstraintAxisHorizontal;
     tplRow.spacing = 8;
+    tplRow.distribution = UIStackViewDistributionFillEqually;
     UIButton *saveTplBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [saveTplBtn setTitle:@"\U0001F4BE  Save" forState:UIControlStateNormal];
     saveTplBtn.titleLabel.font = [UIFont systemFontOfSize:13];
@@ -885,35 +886,39 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
 }
 
 - (void)loadTemplateTapped {
-    NSString *path = [self templateFilePath];
-    NSData *data = [NSData dataWithContentsOfFile:path];
-    if (!data) { [self flash:@"\u26A0\uFE0F No saved template" red:YES]; return; }
-    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![arr isKindOfClass:[NSArray class]] || arr.count == 0) { [self flash:@"\u26A0\uFE0F Empty" red:YES]; return; }
+    @try {
+        NSString *path = [self templateFilePath];
+        NSData *data = [NSData dataWithContentsOfFile:path];
+        if (!data) { [self flash:@"\u26A0\uFE0F No saved template" red:YES]; return; }
+        NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![arr isKindOfClass:[NSArray class]] || arr.count == 0) { [self flash:@"\u26A0\uFE0F Empty" red:YES]; return; }
 
-    for (MIMessageRow *row in self.messageRows) {
-        [self.messageStack removeArrangedSubview:row];
-        [row removeFromSuperview];
-    }
-    [self.messageRows removeAllObjects];
+        for (MIMessageRow *row in self.messageRows) {
+            [self.messageStack removeArrangedSubview:row];
+            [row removeFromSuperview];
+        }
+        [self.messageRows removeAllObjects];
 
-    for (NSDictionary *d in arr) {
-        MIMessageRow *row = [[MIMessageRow alloc] init];
-        BOOL isMe = [d[@"s"] isEqualToString:@"me"];
-        row.isMe = isMe;
-        row.sideControl.selectedSegmentIndex = isMe ? 0 : 1;
-        row.textField.text = d[@"t"] ?: @"";
-        row.minAgoField.text = [NSString stringWithFormat:@"%@", d[@"m"] ?: @"0"];
-        __weak typeof(self) weakSelf = self;
-        row.onChanged = ^{ [weakSelf refreshPreview]; };
-        row.onDelete = ^(MIMessageRow *r) { [weakSelf removeMessageRow:r]; };
-        [self.messageRows addObject:row];
-        [self.messageStack addArrangedSubview:row];
-        row.textField.inputAccessoryView = self.kbToolbar;
-        row.minAgoField.inputAccessoryView = self.kbToolbar;
+        for (NSDictionary *d in arr) {
+            MIMessageRow *row = [[MIMessageRow alloc] init];
+            BOOL isMe = [d[@"s"] isEqualToString:@"me"];
+            row.isMe = isMe;
+            row.sideControl.selectedSegmentIndex = isMe ? 0 : 1;
+            row.textField.text = d[@"t"] ?: @"";
+            row.minAgoField.text = [NSString stringWithFormat:@"%@", d[@"m"] ?: @"0"];
+            __weak typeof(self) weakSelf = self;
+            row.onChanged = ^{ [weakSelf refreshPreview]; };
+            row.onDelete = ^(MIMessageRow *r) { [weakSelf removeMessageRow:r]; };
+            [self.messageRows addObject:row];
+            [self.messageStack addArrangedSubview:row];
+            row.textField.inputAccessoryView = self.kbToolbar;
+            row.minAgoField.inputAccessoryView = self.kbToolbar;
+        }
+        [self refreshPreview];
+        [self flash:@"\u2705 Loaded" red:NO];
+    } @catch (NSException *e) {
+        [self flash:[NSString stringWithFormat:@"\u274C Load error: %@", e.reason] red:YES];
     }
-    [self refreshPreview];
-    [self flash:@"\u2705 Loaded" red:NO];
 }
 
 - (void)deepScanTapped {
