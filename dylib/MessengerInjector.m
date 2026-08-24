@@ -2743,6 +2743,51 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
             }
 
 
+            // COLUMN-BY-COLUMN DIFF: real vs injected in same thread
+            {
+                long long probePk = 0;
+                sqlite3_stmt *fp = NULL;
+                NSString *fq = [NSString stringWithFormat:
+                    @"SELECT DISTINCT c1.thread_pk FROM client_messages c1 "
+                     "JOIN client_messages c2 ON c1.thread_pk = c2.thread_pk "
+                     "WHERE c1.message_creation_type = 5 AND c2.message_creation_type != 5 LIMIT 1"];
+                if (sqlite3_prepare_v2(db, fq.UTF8String, -1, &fp, NULL) == SQLITE_OK) {
+                    if (sqlite3_step(fp) == SQLITE_ROW) probePk = sqlite3_column_int64(fp, 0);
+                    sqlite3_finalize(fp);
+                }
+                if (probePk > 0) {
+                    NSString *queries[2] = {
+                        [NSString stringWithFormat:
+                            @"SELECT * FROM client_messages WHERE thread_pk = %lld AND message_creation_type = 5 "
+                             "ORDER BY authoritative_ts_ms DESC LIMIT 1", probePk],
+                        [NSString stringWithFormat:
+                            @"SELECT * FROM client_messages WHERE thread_pk = %lld AND message_creation_type != 5 "
+                             "ORDER BY authoritative_ts_ms DESC LIMIT 1", probePk]
+                    };
+                    const char *labels[2] = { "REAL", "OURS" };
+                    for (int qi = 0; qi < 2; qi++) {
+                        sqlite3_stmt *st = NULL;
+                        if (sqlite3_prepare_v2(db, queries[qi].UTF8String, -1, &st, NULL) != SQLITE_OK) continue;
+                        if (sqlite3_step(st) == SQLITE_ROW) {
+                            int cc = sqlite3_column_count(st);
+                            [report appendFormat:@"\n--- %s ---\n", labels[qi]];
+                            for (int c = 0; c < cc; c++) {
+                                int ct = sqlite3_column_type(st, c);
+                                const char *cn = sqlite3_column_name(st, c);
+                                if (ct == SQLITE_NULL) { [report appendFormat:@"%s=NULL\n", cn]; continue; }
+                                NSString *v;
+                                if (ct == SQLITE_TEXT || ct == SQLITE_BLOB) {
+                                    v = MI_cstr(sqlite3_column_text(st,c)) ?: @"";
+                                    if (v.length > 24) v = [v substringToIndex:24];
+                                } else v = [NSString stringWithFormat:@"%lld", sqlite3_column_int64(st,c)];
+                                [report appendFormat:@"%s=%@\n", cn, v];
+                            }
+                        }
+                        sqlite3_finalize(st);
+                    }
+                }
+            }
+
             // CRITICAL: the main .db file rewrite (TRUNCATE) is what triggers
             // Messenger to rebuild its thread list from the DB. A blocked
             // Arm the snippet enforcer (keeps preview alive vs server deltas)
