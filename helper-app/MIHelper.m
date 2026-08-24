@@ -860,6 +860,13 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
         postNotificationName:kNotifyRestore object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
 }
 
+- (void)flash:(NSString *)msg red:(BOOL)isRed {
+    self.resultCard.hidden = NO;
+    self.resultCard.backgroundColor = isRed ? [UIColor systemRedColor] : [UIColor systemGreenColor];
+    self.resultLabel.textColor = [UIColor whiteColor];
+    self.resultLabel.text = msg;
+}
+
 - (NSString *)templateFilePath {
     return [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_template.json"];
 }
