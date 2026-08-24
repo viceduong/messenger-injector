@@ -2633,8 +2633,8 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                 NSString *side = msg[@"s"];
                 NSString *text = msg[@"t"];
                 NSNumber *minAgo = msg[@"m"];
-                long long minutesAgo = minAgo ? minAgo.longLongValue : (messages.count - i);
-                long long ts = nowMs - (minutesAgo * 60 * 1000);
+                long long secondsAgo = minAgo ? (minAgo.longLongValue * 60) : ((messages.count - i) * 3);
+                long long ts = nowMs - (secondsAgo * 1000);
                 NSString *senderId = [side isEqualToString:@"me"] ? localUid : otherUid;
 
                 // Generate message_id in Messenger format: mid.$<random_base64_like>
@@ -2682,7 +2682,7 @@ static void MI_hInject(NSString *threadIdIn, NSArray *messages) {
                         @"should_bump_thread, resonance_offline_threading_id) "
                         @"VALUES (%lld, %lld, -1, %lld, '%@', 0, "
                         @"%lld, 2, 0, 0, 0, "
-                        @"'%@', 0, 6, %lld, 1, %lld)",
+                        @"'%@', 0, 5, %lld, 1, %lld)",
                         threadPk, ts, ts, MI_esc(text), contactPk, MI_esc(persistentId), ts, otid];
                     if (msgIdStr.length) {
                         char *le = NULL;
