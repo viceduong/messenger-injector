@@ -3306,14 +3306,40 @@ static void MI_ctor(void) {
 
     MI_progress(@"ctor: dylib loaded, crash handlers installed");
 
-    // Resume snippet enforcement from previous session
-    NSString *es = [[NSUserDefaults standardUserDefaults] stringForKey:@"mi_enforce_snippet"];
-    NSString *et = [[NSUserDefaults standardUserDefaults] stringForKey:@"mi_enforce_thread"];
-    if (es.length > 0 && et.length > 0) {
-        g_enforceSnippet = es;
-        g_enforceThreadId = et;
-        MI_StartEnforcer();
-    }
+    // AUTO-REPAIR: drop all leftover protection artifacts
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        @try {
+            NSString *dbPath = MI_findDatabase();
+            if (!dbPath.length) { MI_progress(@"repair: no DB"); return; }
+            sqlite3 *db = NULL;
+            if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
+                if (db) sqlite3_close(db); return;
+            }
+            sqlite3_busy_timeout(db, 5000);
+            int dropped = 0;
+            NSMutableArray *names = [NSMutableArray array];
+            sqlite3_stmt *ts = NULL;
+            if (sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'mi_%'", -1, &ts, NULL) == SQLITE_OK) {
+                while (sqlite3_step(ts) == SQLITE_ROW) {
+                    NSString *n = MI_cstr(sqlite3_column_text(ts,0)) ?: @"";
+                    if (n.length) [names addObject:n];
+                }
+                sqlite3_finalize(ts);
+            }
+            for (NSString *n in names) {
+                char *err = NULL;
+                NSString *dq = [NSString stringWithFormat:@"DROP TRIGGER IF EXISTS \"%@\"", n];
+                if (sqlite3_exec(db, dq.UTF8String, NULL, NULL, &err) == SQLITE_OK) dropped++;
+                if (err) { sqlite3_free(err); err = NULL; }
+            }
+            sqlite3_exec(db, "DROP TABLE IF EXISTS mi_preview", NULL, NULL, NULL);
+            sqlite3_exec(db, "DROP TABLE IF EXISTS mi_allow", NULL, NULL, NULL);
+            sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_TRUNCATE, NULL, NULL);
+            sqlite3_close(db);
+            MI_progress([NSString stringWithFormat:@"REPAIR DONE: %d trigger(s) dropped", dropped]);
+        } @catch (NSException *e) { MI_progress(@"repair exc"); }
+    });
+
 
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
