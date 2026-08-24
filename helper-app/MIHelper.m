@@ -395,6 +395,26 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     [stack addArrangedSubview:self.previewView];
     [stack addArrangedSubview:s3];
     [stack addArrangedSubview:self.injectBtn];
+
+    // Save/Load template row
+    UIStackView *tplRow = [[UIStackView alloc] init];
+    tplRow.axis = UILayoutConstraintAxisHorizontal;
+    tplRow.spacing = 8;
+    UIButton *saveTplBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [saveTplBtn setTitle:@"\U0001F4BE  Save" forState:UIControlStateNormal];
+    saveTplBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [saveTplBtn addTarget:self action:@selector(saveTemplateTapped) forControlEvents:UIControlEventTouchUpInside];
+    saveTplBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [saveTplBtn.heightAnchor constraintEqualToConstant:36].active = YES;
+    UIButton *loadTplBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [loadTplBtn setTitle:@"\U0001F4C2  Load" forState:UIControlStateNormal];
+    loadTplBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [loadTplBtn addTarget:self action:@selector(loadTemplateTapped) forControlEvents:UIControlEventTouchUpInside];
+    loadTplBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [loadTplBtn.heightAnchor constraintEqualToConstant:36].active = YES;
+    [tplRow addArrangedSubview:saveTplBtn];
+    [tplRow addArrangedSubview:loadTplBtn];
+    [stack addArrangedSubview:tplRow];
     [stack addArrangedSubview:self.resultCard];
     [stack addArrangedSubview:self.debugToggleBtn];
     [stack addArrangedSubview:self.debugStack];
@@ -838,6 +858,55 @@ static NSString *const kNotifyIvars   = @"com.messenger.injector.ivars";
     self.resultLabel.text = @"\u267B\uFE0F Clearing sync ranges... then reopen Messenger on WiFi";
     [[NSDistributedNotificationCenter defaultCenter]
         postNotificationName:kNotifyRestore object:nil userInfo:@{@"threadId": tid} deliverImmediately:YES];
+}
+
+- (NSString *)templateFilePath {
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"mi_template.json"];
+}
+
+- (void)saveTemplateTapped {
+    NSMutableArray *arr = [NSMutableArray array];
+    for (MIMessageRow *row in self.messageRows) {
+        NSString *t = [row.textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (t.length == 0) continue;
+        [arr addObject:@{@"s": row.isMe ? @"me" : @"them", @"t": t, @"m": row.minAgoField.text ?: @"0"}];
+    }
+    if (arr.count == 0) { [self flash:@"\u26A0\uFE0F Nothing to save" red:YES]; return; }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:arr options:NSJSONWritingPrettyPrinted error:nil];
+    [data writeToFile:[self templateFilePath] atomically:YES];
+    [self flash:@"\u2705 Template saved" red:NO];
+}
+
+- (void)loadTemplateTapped {
+    NSString *path = [self templateFilePath];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) { [self flash:@"\u26A0\uFE0F No saved template" red:YES]; return; }
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![arr isKindOfClass:[NSArray class]] || arr.count == 0) { [self flash:@"\u26A0\uFE0F Empty" red:YES]; return; }
+
+    for (MIMessageRow *row in self.messageRows) {
+        [self.messageStack removeArrangedSubview:row];
+        [row removeFromSuperview];
+    }
+    [self.messageRows removeAllObjects];
+
+    for (NSDictionary *d in arr) {
+        MIMessageRow *row = [[MIMessageRow alloc] init];
+        BOOL isMe = [d[@"s"] isEqualToString:@"me"];
+        row.isMe = isMe;
+        row.sideControl.selectedSegmentIndex = isMe ? 0 : 1;
+        row.textField.text = d[@"t"] ?: @"";
+        row.minAgoField.text = [d[@"m"] stringValue] ?: @"0";
+        __weak typeof(self) weakSelf = self;
+        row.onChanged = ^{ [weakSelf refreshPreview]; };
+        row.onDelete = ^(MIMessageRow *r) { [weakSelf removeMessageRow:r]; };
+        [self.messageRows addObject:row];
+        [self.messageStack addArrangedSubview:row];
+        row.textField.inputAccessoryView = self.kbToolbar;
+        row.minAgoField.inputAccessoryView = self.kbToolbar;
+    }
+    [self refreshPreview];
+    [self flash:@"\u2705 Loaded" red:NO];
 }
 
 - (void)deepScanTapped {
